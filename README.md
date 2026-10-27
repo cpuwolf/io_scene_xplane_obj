@@ -34,6 +34,28 @@ Triangle winding is flipped on both sides: X-Plane calls a *clockwise* triangle
 the front face, Blender a counter-clockwise one. Forgetting this makes every
 model render inside-out — no error, just invisible surfaces.
 
+## Where the X-Plane data lives
+
+One `.obj` becomes one Empty plus one mesh per geometry command. Blender has no
+concept of a dataref, so the file's animation is **not** turned into actions or
+drivers — it stays text in custom properties on the Empty and is re-emitted on
+export. Nothing you do to the meshes can damage it.
+
+| property | on | contents |
+| --- | --- | --- |
+| `xp8_dump` | Empty | the whole original file, for the byte-identical write-back |
+| `xp8_events` | Empty | ordered command stream: `["A"]` ANIM_begin, `["Z"]` ANIM_end, `["R", line]` any command line verbatim, `["L", n]` geometry batch `n` |
+| `xp8_globals` | Empty | `TEXTURE` / `POINT_COUNTS` / `GLOBAL_*` lines |
+| `xp8_leaf_states` | Empty | the `ATTR_*` snapshot each batch draws under |
+| `xp8_leaf_objs` | Empty | batch index → object name |
+| `xp8_fingerprints`, `xp8_cmd_hash` | Empty | what the "was anything changed?" test compares |
+| `xp8_leaf`, `xp8_placement` | mesh | which batch it is, and the static `ANIM_trans` applied to place it |
+| `xp8_vt` | mesh attribute | source `VT` row index per vertex, so untouched rows keep their exact text |
+
+Editing `xp8_events`, `xp8_globals` or `xp8_leaf_states` and exporting does reach
+the file: the untouched-file shortcut switches itself off as soon as any of them,
+or any geometry, differs from what was imported.
+
 ## Known limits
 
 * `LINES` are imported read-only and exported from their stored indices; light

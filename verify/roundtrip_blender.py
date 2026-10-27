@@ -24,6 +24,7 @@ release workflow does, so the zip's file list is proven complete.
 """
 import hashlib
 import importlib
+import json
 import os
 import sys
 import tempfile
@@ -171,6 +172,46 @@ def main():
                  "IDENTICAL" if same else "DIFFERS", time.time() - t))
         check(same, "%s is not byte identical after an untouched round trip"
               % stem)
+
+    # ---- 2b. editing the stored command stream must reach the file ------
+    # xp8_globals / xp8_events / xp8_leaf_states are the editable surface; the
+    # verbatim path writes the original text back, so it has to notice them
+    print("\nedit the stored command stream and state:")
+    h = headers[0]
+    stem = os.path.splitext(os.path.basename(h.get(XM.PROP_SOURCE, "x")))[0]
+    dst = os.path.join(OUT, stem + "_cmdedit.obj")
+
+    keep_events = h[XM.PROP_EVENTS]
+    events = json.loads(keep_events)
+    events.append([OC.EV_RAW, "# added by the round trip test"])
+    h[XM.PROP_EVENTS] = json.dumps(events)
+    stats = XM.export_header(bpy.context, h, dst, preserve=True)
+    text = open(dst, "r", encoding="latin-1").read()
+    check(not stats["verbatim"], "an edited command stream was written verbatim")
+    check("# added by the round trip test" in text,
+          "the added command did not reach the file")
+    print("  command stream edit: %s" % ("reached the file"
+                                         if "# added by the round trip test"
+                                         in text else "LOST"))
+    h[XM.PROP_EVENTS] = keep_events
+
+    keep_states = h[XM.PROP_LEAF_STATES]
+    states = json.loads(keep_states)
+    states[0] = list(states[0]) + [["poly_os", ["ATTR_poly_os\t3"]]]
+    h[XM.PROP_LEAF_STATES] = json.dumps(states)
+    stats = XM.export_header(bpy.context, h, dst, preserve=True)
+    text = open(dst, "r", encoding="latin-1").read()
+    check(not stats["verbatim"], "an edited attribute state was written verbatim")
+    check("ATTR_poly_os\t3" in text, "the edited state did not reach the file")
+    print("  attribute state edit: %s" % ("reached the file"
+                                         if "ATTR_poly_os\t3" in text
+                                         else "LOST"))
+    h[XM.PROP_LEAF_STATES] = keep_states
+
+    stats = XM.export_header(bpy.context, h, dst, preserve=True)
+    print("  restored props -> verbatim again: %s" % stats["verbatim"])
+    check(stats["verbatim"], "putting the properties back did not restore the "
+                             "verbatim path")
 
     # ---- 3. edit geometry, export, verify the file structure survives ---
     print("\nedit + export #2:")

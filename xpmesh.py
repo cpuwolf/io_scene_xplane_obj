@@ -58,6 +58,8 @@ PROP_TEXTURE_NORMAL = "xp8_texture_normal"
 PROP_TEXTURE_MAP = "xp8_texture_map"
 PROP_VT_ATTR = "xp8_vt"
 PROP_PLACEMENT = "xp8_placement"
+PROP_LEAF_STATES = "xp8_leaf_states"
+PROP_CMD_HASH = "xp8_cmd_hash"
 
 ROLE_HEADER = "header"
 ROLE_TRIS = "tris"
@@ -96,6 +98,19 @@ def _q(values):
             int(round(values[3] * NRM_Q)), int(round(values[4] * NRM_Q)),
             int(round(values[5] * NRM_Q)),
             int(round(values[6] * UV_Q)), int(round(values[7] * UV_Q)))
+
+
+def command_hash(header):
+    """Hash of the stored command stream, globals and attribute states.
+
+    The verbatim path writes the original file text back, which would silently
+    throw away an edit made to these properties -- so they are part of the
+    "was anything changed" test, not just the geometry fingerprints.
+    """
+    parts = []
+    for prop in (PROP_GLOBALS, PROP_EVENTS, PROP_LEAF_STATES):
+        parts.append(str(header.get(prop, "")).encode())
+    return _hexdigest(parts)
 
 
 def export_matrix(ob):
@@ -433,6 +448,10 @@ def import_file(context, path, into_collection=None, report=None,
         if ob is not None:
             fps[name] = object_fingerprint(context, ob)
     header[PROP_FINGERPRINTS] = json.dumps(fps)
+    # the per-leaf ATTR_* snapshots: a property, so they can be read and edited
+    # without digging the raw command text out of xp8_dump
+    header[PROP_LEAF_STATES] = json.dumps([leaf.state for leaf in obj8.leaves])
+    header[PROP_CMD_HASH] = command_hash(header)
 
     # make the header the active object: the exporter and the side panel both
     # start from it, and in background mode nothing is selected otherwise
@@ -690,6 +709,15 @@ def _header_template(header):
             template.events = [(k, p) for k, p in json.loads(header[PROP_EVENTS])]
         except ValueError:
             pass
+    states = header.get(PROP_LEAF_STATES)
+    if states:
+        try:
+            parsed = json.loads(states)
+        except ValueError:
+            parsed = None
+        if parsed is not None:
+            for leaf, state in zip(template.leaves, parsed):
+                leaf.state = [[cat, list(raws)] for cat, raws in state]
     return template
 
 
@@ -812,6 +840,8 @@ def build_tables(context, template, leaf_objects, uv_name=None, report=None):
 
 
 def _unmodified(context, header, uv_name):
+    if header.get(PROP_CMD_HASH) != command_hash(header):
+        return False            # the command stream or a state snapshot was edited
     stored = header.get(PROP_FINGERPRINTS)
     if not stored:
         return False
