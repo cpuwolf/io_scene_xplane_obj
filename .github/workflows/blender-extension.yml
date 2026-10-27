@@ -20,9 +20,12 @@ env:
 
 jobs:
   package:
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: the label is mid-migration from 24.04 to 26.04
+    # (Oct-Nov 2026) and the apt package names below are 24.04's. Move it after
+    # testing the build on ubuntu-26.04 explicitly.
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0    # the tag annotation becomes the release notes
 
@@ -63,7 +66,7 @@ jobs:
           blender --factory-startup --command extension validate dist/*.zip
           unzip -l dist/*.zip
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: blender-extension
           path: dist/*.zip
