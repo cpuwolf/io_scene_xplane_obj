@@ -68,14 +68,17 @@ debugged without starting Blender.
 ## Releasing
 
 1. bump `version` in `blender_manifest.toml`
-2. `git tag v<same version> && git push --tags`
+2. `git tag -a v<same version>` (annotated: its message becomes the release
+   notes) and `git push origin main v<same version>`
 
 The `v*` tag runs `.github/workflows/blender-extension.yml`, which builds
 `io_scene_xplane_obj-<version>.zip` with `blender --command extension build`,
-validates it and keeps it as the `blender-extension` build artifact. Download it
-from the run page and upload it at
-<https://extensions.blender.org/submit/>; it appears publicly once the moderation
+validates it, keeps it as the `blender-extension` build artifact and attaches it
+to a **draft** GitHub release. Nothing is published automatically: review the
+draft and publish it if you want it on GitHub, then send the same zip to
+<https://extensions.blender.org/submit/>, where it appears once the moderation
 team approves it.
+
 
 What ends up in the zip is decided by `[build] paths_exclude_pattern` in the
 manifest: the add-on modules, `LICENSE` and this README. The test fixtures, the
