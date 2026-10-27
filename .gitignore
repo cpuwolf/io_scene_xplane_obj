@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Blender extension build output
+dist/
+*.zip
+
+# macOS
+.DS_Store
+._*
+
+# scratch output from the verify scripts
+verify/_roundtrip.obj
+verify/*.blend1

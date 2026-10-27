@@ -1,0 +1,22 @@
+schema_version = "1.0.0"
+
+# Blender extension manifest.  Kept at the repository root so
+# `blender --command extension build` works from here; the zip it produces has
+# these files at the archive root and Blender unpacks them into
+# extensions/<repo>/io_scene_xplane_obj/.
+
+id = "io_scene_xplane_obj"
+version = "1.0.0"
+name = "X-Plane OBJ8 Object"
+tagline = "Import and export X-Plane .obj objects with textures"
+maintainer = "Wei Shuai"
+type = "add-on"
+
+tags = ["Import-Export"]
+
+website = "https://github.com/cpuwolf/io_scene_xplane_obj"
+license = ["SPDX:GPL-3.0-or-later"]
+
+blender_version_min = "4.2.0"
+
+copyright = ["2026 Wei Shuai"]
