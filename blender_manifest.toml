@@ -6,7 +6,7 @@ schema_version = "1.0.0"
 # extensions/<repo>/io_scene_xplane_obj/.
 
 id = "io_scene_xplane_obj"
-version = "0.0.2"
+version = "0.0.3"
 name = "X-Plane OBJ8 Object"
 tagline = "Import and export X-Plane .obj objects with textures"
 maintainer = "Wei Shuai"
