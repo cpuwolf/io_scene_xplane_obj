@@ -34,6 +34,7 @@ import os
 
 import bpy
 import numpy as np
+from mathutils import Matrix, Vector
 
 from . import objcodec as OC
 
@@ -56,6 +57,7 @@ PROP_TEXTURE_LIT = "xp8_texture_lit"
 PROP_TEXTURE_NORMAL = "xp8_texture_normal"
 PROP_TEXTURE_MAP = "xp8_texture_map"
 PROP_VT_ATTR = "xp8_vt"
+PROP_PLACEMENT = "xp8_placement"
 
 ROLE_HEADER = "header"
 ROLE_TRIS = "tris"
@@ -94,6 +96,28 @@ def _q(values):
             int(round(values[3] * NRM_Q)), int(round(values[4] * NRM_Q)),
             int(round(values[5] * NRM_Q)),
             int(round(values[6] * UV_Q)), int(round(values[7] * UV_Q)))
+
+
+def export_matrix(ob):
+    """The transform geometry is written with: the object's own frame.
+
+    A part modelled at the file origin and placed by a static `ANIM_trans` (the
+    gear legs of most aircraft objects) is moved to its real position at import
+    so it can be edited where it belongs.  That offset belongs to the file, not
+    to the geometry, so export has to take it back out -- otherwise a saved file
+    would have the gear translated twice.
+    """
+    m = ob.matrix_world.copy()
+    raw = ob.get(PROP_PLACEMENT)
+    if not raw:
+        return m
+    try:
+        p = json.loads(raw)
+    except ValueError:
+        return m
+    if len(p) != 3:
+        return m
+    return Matrix.Translation(Vector((-p[0], -p[1], -p[2]))) @ m
 
 
 def is_header(obj):
@@ -302,7 +326,42 @@ def _parse_line_rows(rows):
     return out
 
 
-def import_file(context, path, into_collection=None, report=None):
+def constant_translations(obj8):
+    """leaf index -> accumulated static ANIM_trans, in X-Plane axes.
+
+    Aircraft objects model a part at the file origin and move it into place with
+    a *static* translate, written as ``ANIM_trans x y z x y z`` (both ends the
+    same, with or without a trailing ``0 0 no_ref``).  X-Plane applies that at
+    runtime, which is why the raw geometry of, say, a main gear leg sits at the
+    aircraft reference point.  Translates whose two ends differ are animated and
+    are left alone.
+    """
+    totals = {}
+    stack = [[0.0, 0.0, 0.0]]
+    for kind, payload in obj8.events:
+        if kind == OC.EV_ANIM_BEGIN:
+            stack.append([0.0, 0.0, 0.0])
+        elif kind == OC.EV_ANIM_END:
+            if len(stack) > 1:
+                stack.pop()
+        elif kind == OC.EV_RAW and payload:
+            words = payload.split()
+            if words and words[0] == "ANIM_trans" and len(words) >= 7:
+                try:
+                    v = [float(w) for w in words[1:7]]
+                except ValueError:
+                    continue
+                if v[0] == v[3] and v[1] == v[4] and v[2] == v[5]:
+                    for i in range(3):
+                        stack[-1][i] += v[i]
+        elif kind == OC.EV_LEAF:
+            totals[payload] = tuple(sum(level[i] for level in stack)
+                                    for i in range(3))
+    return totals
+
+
+def import_file(context, path, into_collection=None, report=None,
+                place_parts=True):
     """Import one .obj file.  Returns the header Empty (or None on failure)."""
     path = os.path.abspath(path)
     with open(path, "rb") as f:
@@ -330,6 +389,8 @@ def import_file(context, path, into_collection=None, report=None):
 
     leaf_objs = [None] * len(obj8.leaves)
     vline_pts = _parse_line_rows(obj8.vline)
+    placed = constant_translations(obj8) if place_parts else {}
+    n_placed = 0
 
     for leaf_index, leaf in enumerate(obj8.leaves):
         if leaf.kind == "TRIS":
@@ -345,6 +406,13 @@ def import_file(context, path, into_collection=None, report=None):
         ob.parent = header
         ob.matrix_parent_inverse.identity()
         ob[PROP_LEAF] = leaf_index
+        offset = placed.get(leaf_index)
+        if offset and any(abs(v) > 1e-9 for v in offset):
+            loc = xp_to_bl(offset)
+            ob.location = loc
+            # kept so that export can subtract it again and stay byte identical
+            ob[PROP_PLACEMENT] = json.dumps(list(loc))
+            n_placed += 1
         leaf_objs[leaf_index] = ob.name
 
     header[PROP_GLOBALS] = json.dumps(obj8.globals)
@@ -373,6 +441,8 @@ def import_file(context, path, into_collection=None, report=None):
     header.select_set(True)
     context.view_layer.objects.active = header
 
+    if n_placed:
+        header["xp8_placed_parts"] = n_placed
     for w in warnings:
         if report:
             report({'WARNING'}, w)
@@ -538,7 +608,7 @@ def triangle_corners(context, ob, uv_name=None):
         else:
             uvs = np.zeros((n_loops, 2), dtype=np.float64)
 
-        m = np.array(ob.matrix_world, dtype=np.float64)
+        m = np.array(export_matrix(ob), dtype=np.float64)
         rot = m[:3, :3]
         trans = m[:3, 3]
         world = verts @ rot.T + trans
@@ -587,7 +657,7 @@ def object_fingerprint(context, ob, uv_name=None):
     if got is None:
         return "unreadable"
     corners = got[0]
-    m = np.array(ob.matrix_world, dtype=np.float64).ravel()
+    m = np.array(export_matrix(ob), dtype=np.float64).ravel()
     parts = [("%.5f|" % v).encode() for v in m]
     for pos, nrm, uv in corners:
         parts.append(("%d,%d,%d,%d,%d,%d,%d,%d|"
@@ -728,7 +798,7 @@ def build_tables(context, template, leaf_objects, uv_name=None, report=None):
             idx_values.append(slot)
             parts.append(("%d,%d,%d,%d,%d,%d,%d,%d|" % key).encode())
         spans[leaf_index] = (offset, len(corners))
-        m = np.array(ob.matrix_world, dtype=np.float64).ravel()
+        m = np.array(export_matrix(ob), dtype=np.float64).ravel()
         fps[name] = _hexdigest([("%.5f|" % v).encode() for v in m] + parts)
 
     # drop the rows nothing points at any more, keeping the original order

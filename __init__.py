@@ -84,6 +84,14 @@ class IMPORT_OT_xplane_obj(bpy.types.Operator, ImportHelper):
         description="Import every .obj sitting next to the selected file",
         default=False)
 
+    place_parts: BoolProperty(
+        name="Place animated parts",
+        description="Parts modelled at the file origin and moved into place by "
+                    "a static ANIM_trans (landing gear legs, wipers) are moved "
+                    "to their real position so they can be edited there. "
+                    "Export subtracts it again, so the file stays unchanged",
+        default=True)
+
     def execute(self, context):
         path = self.filepath
         if not os.path.isfile(path):
@@ -110,7 +118,8 @@ class IMPORT_OT_xplane_obj(bpy.types.Operator, ImportHelper):
         for p in paths:
             try:
                 header = XM.import_file(context, p, into_collection=coll,
-                                        report=self.report)
+                                        report=self.report,
+                                        place_parts=self.place_parts)
             except (ValueError, OSError) as exc:
                 self.report({'ERROR'}, "%s: %s" % (os.path.basename(p), exc))
                 continue

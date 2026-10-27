@@ -94,3 +94,4 @@ cam_data.lens = 60
 radius = max(size) * 2.4
 shoot("three_quarter", Vector((0.75, 0.55, 0.45)))
 shoot("side", Vector((1, 0, 0.02)))
+shoot("gear", Vector((0.55, 0.75, -0.30)))

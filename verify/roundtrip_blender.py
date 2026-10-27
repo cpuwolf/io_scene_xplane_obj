@@ -134,7 +134,9 @@ def main():
         if ob.type != 'MESH' or not XM.is_batch(ob):
             continue
         for corner in ob.bound_box:
-            w = ob.matrix_world @ Vector(corner)
+            # the frame the geometry is written in: static ANIM_trans offsets
+            # are applied to the object, not baked into the vertices
+            w = XM.export_matrix(ob) @ Vector(corner)
             for i in range(3):
                 blo[i] = min(blo[i], w[i])
                 bhi[i] = max(bhi[i], w[i])
