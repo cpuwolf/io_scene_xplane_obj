@@ -1,6 +1,7 @@
 """Headless Blender test for the X-Plane OBJ8 addon.
 
-    blender --background --factory-startup --python verify/roundtrip_blender.py
+    blender -b --factory-startup --python verify/roundtrip_blender.py -- \
+            [samples-dir] [output-dir]
 
 Checks, in order:
  1. import every .obj in the sample folder (real operator, real materials)
@@ -9,25 +10,51 @@ Checks, in order:
     triangle count, and keep every ANIM_* / ATTR_* command line
  4. re-import the edited file and confirm it comes back with the same geometry
  5. export a loose Blender mesh with no X-Plane data and re-import it
+
+Defaults to the small fixture in verify/fixtures, so it works on a bare
+checkout and in CI.  Point it at a real aircraft folder for a much stronger
+test:
+
+    blender -b --factory-startup --python verify/roundtrip_blender.py -- \
+        "/path/to/objects/C90B_exterior"
+
+Set XPOBJ_EXT_MODULE=bl_ext.user_default.io_scene_xplane_obj to test a *built*
+and installed package instead of importing the source tree -- that is what the
+release workflow does, so the zip's file list is proven complete.
 """
+import hashlib
+import importlib
 import os
 import sys
+import tempfile
 import time
-import hashlib
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.dirname(REPO))
 
 import bpy                                                   # noqa: E402
 
-addon = __import__(os.path.basename(REPO))                    # noqa: E402
-addon.register()
-OC = addon.OC
-XM = addon.XM
+argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
+SAMPLES = argv[0] if argv else os.path.join(REPO, "verify", "fixtures")
+OUT = argv[1] if len(argv) > 1 else os.path.join(
+    tempfile.gettempdir(), "xpobj_roundtrip")
+EXT_MODULE = os.environ.get("XPOBJ_EXT_MODULE", "").strip()
 
-SAMPLES = ("/Users/rourou/X-Plane 12/Aircraft/King Air C90B EVO G1000 V1.3.1"
-           "/objects/C90B_exterior")
-OUT = os.path.expanduser("~/.hermes/cache/scratch/xpobj_roundtrip")
+
+def load_addon():
+    """Return (OC, XM) from either the installed extension or the source tree."""
+    if EXT_MODULE:
+        pkg = importlib.import_module(EXT_MODULE)
+        print("testing the installed package: %s (%s)"
+              % (EXT_MODULE, os.path.dirname(pkg.__file__)))
+        return pkg.OC, pkg.XM
+    sys.path.insert(0, os.path.dirname(REPO))
+    pkg = __import__(os.path.basename(REPO))
+    pkg.register()
+    print("testing the source tree: %s" % REPO)
+    return pkg.OC, pkg.XM
+
+
+OC, XM = load_addon()
 
 fails = []
 
@@ -37,6 +64,13 @@ def check(cond, msg):
         fails.append(msg)
         print("   FAIL %s" % msg)
     return cond
+
+
+def reset_scene():
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    if EXT_MODULE:
+        # factory-startup drops add-ons, and this one is what we are testing
+        bpy.ops.preferences.addon_enable(module=EXT_MODULE)
 
 
 def sha(path):
@@ -54,7 +88,7 @@ def main():
     print("samples: %d files\n" % len(originals))
 
     # ---- 1. import ------------------------------------------------------
-    bpy.ops.wm.read_factory_settings(use_empty=True)
+    reset_scene()
     t = time.time()
     r = bpy.ops.import_scene.xplane_obj(filepath=originals[0], import_folder=True)
     print("import: %s in %.1fs" % (r, time.time() - t))
@@ -106,15 +140,18 @@ def main():
 
     # ---- 3. edit geometry, export, verify the file structure survives ---
     print("\nedit + export #2:")
-    victim_header = [h for h in headers
-                     if "fuselage" in h.get(XM.PROP_SOURCE, "")][0]
+    # the biggest object is the interesting one (flight model, door animations)
+    victim_header = max(headers, key=lambda h: sum(
+        len(c.data.polygons) for c in h.children
+        if c.get(XM.PROP_ROLE) == XM.ROLE_TRIS))
     victim = None
     for child in victim_header.children:
         if child.get(XM.PROP_ROLE) == XM.ROLE_TRIS and len(child.data.vertices):
             victim = child
             break
     check(victim is not None, "no tri object to edit")
-    before = len(victim.data.vertices)
+    if victim is None:
+        return 1
     # move one vertex 10 cm along +X (Blender), which is +X in X-Plane too
     victim.data.vertices[0].co.x += 0.1
     victim.data.update()
@@ -151,7 +188,7 @@ def main():
 
     # ---- 4. re-import the edited file ----------------------------------
     print("\nre-import edited file:")
-    bpy.ops.wm.read_factory_settings(use_empty=True)
+    reset_scene()
     r = bpy.ops.import_scene.xplane_obj(filepath=dst)
     check(r == {'FINISHED'}, "re-import failed")
     h2 = [o for o in bpy.data.objects if XM.is_header(o)]
@@ -164,7 +201,7 @@ def main():
 
     # ---- 5. scratch export ---------------------------------------------
     print("\nscratch export:")
-    bpy.ops.wm.read_factory_settings(use_empty=True)
+    reset_scene()
     bpy.ops.mesh.primitive_cube_add(size=2)
     cube = bpy.context.active_object
     cube.location = (0.0, 0.0, 1.0)
@@ -182,7 +219,7 @@ def main():
     check(len(o.idx) == 36, "cube should have 36 indices, got %d" % len(o.idx))
     print("  %s: vt %d idx %d leaves %d" % (os.path.basename(dst), len(o.vt),
                                             len(o.idx), len(o.leaves)))
-    bpy.ops.wm.read_factory_settings(use_empty=True)
+    reset_scene()
     r = bpy.ops.import_scene.xplane_obj(filepath=dst)
     cube2 = [ob for ob in bpy.data.objects if ob.type == 'MESH']
     check(r == {'FINISHED'} and cube2, "cube re-import failed")

@@ -1,0 +1,207 @@
+name: Blender extension
+
+# Builds the extension package, tests it on the oldest and newest supported
+# Blender, attaches the zip to the GitHub release and -- on a v* tag, or when
+# asked from the Actions tab -- publishes it to extensions.blender.org.
+#
+# Releasing:
+#   1. bump `version` in blender_manifest.toml
+#   2. git commit && git tag v<same version> && git push --tags
+#   3. the publish job uploads the package; it then sits in the platform's
+#      moderation queue before appearing publicly.
+#
+# One-time setup, both on extensions.blender.org:
+#   * submit the add-on once at https://extensions.blender.org/submit/ -- the
+#     API can only add *versions* to an extension that already exists
+#   * copy the API token from your profile page into the repository secret
+#     BLENDER_EXTENSIONS_TOKEN (Settings > Secrets and variables > Actions)
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Upload this build to extensions.blender.org
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  PACKAGE_ID: io_scene_xplane_obj
+  # The version the shippable zip is built with. The test matrix below covers
+  # the manifest's blender_version_min floor as well.
+  BLENDER_BUILD: "5.2.3"
+
+jobs:
+  test:
+    name: test (Blender ${{ matrix.blender }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # floor from blender_version_min, and current stable
+        blender: ["4.2.23", "5.2.3"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-blender
+        with:
+          version: ${{ matrix.blender }}
+
+      - name: Codec tests (no Blender needed)
+        run: |
+          python3 verify/test_codec.py verify/fixtures
+          python3 verify/test_fixture.py
+
+      - name: Build and validate the package
+        run: |
+          mkdir -p dist
+          blender --factory-startup --command extension build \
+            --source-dir . --output-dir dist --verbose
+          blender --factory-startup --command extension validate dist/*.zip
+
+      - name: The package must contain the add-on and nothing else
+        run: |
+          unzip -l dist/*.zip
+          unzip -l dist/*.zip | awk '{print $4}' | grep -qx LICENSE
+          if unzip -l dist/*.zip | awk '{print $4}' \
+              | grep -Eq '^(verify/|dev-link\.sh|\.github/|__pycache__|\.git/)'; then
+            echo "::error::development files leaked into the package"
+            exit 1
+          fi
+
+      - name: Functional test through the built package
+        # installing the zip and importing it by its extension module name is
+        # the only way to prove the package is complete: a module that the
+        # build accidentally excluded fails here, not in a customer's Blender
+        env:
+          BLENDER_USER_EXTENSIONS: ${{ runner.temp }}/extensions
+        run: |
+          blender --command extension install-file -r user_default -e dist/*.zip
+          XPOBJ_EXT_MODULE=bl_ext.user_default.$PACKAGE_ID \
+            blender -b --factory-startup --python verify/roundtrip_blender.py \
+              -- verify/fixtures "$RUNNER_TEMP/out"
+
+  package:
+    name: package
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-blender
+        with:
+          version: ${{ env.BLENDER_BUILD }}
+
+      - name: The manifest version must match the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          manifest=$(sed -n 's/^version = "\(.*\)"$/\1/p' blender_manifest.toml)
+          tag="${GITHUB_REF#refs/tags/v}"
+          echo "manifest $manifest / tag $tag"
+          if [ "$manifest" != "$tag" ]; then
+            echo "::error::blender_manifest.toml says $manifest but the tag is $tag"
+            exit 1
+          fi
+
+      - name: Build, validate, checksum
+        run: |
+          mkdir -p dist
+          blender --factory-startup --command extension build \
+            --source-dir . --output-dir dist --verbose
+          blender --factory-startup --command extension validate dist/*.zip
+          (cd dist && sha256sum *.zip > SHA256SUMS && cat SHA256SUMS)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: blender-extension
+          path: |
+            dist/*.zip
+            dist/SHA256SUMS
+          if-no-files-found: error
+
+  release:
+    name: GitHub release
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: blender-extension
+          path: dist
+
+      - name: Attach the package to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.zip dist/SHA256SUMS \
+            --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
+
+  publish:
+    name: publish to extensions.blender.org
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish)
+    runs-on: ubuntu-latest
+    concurrency:
+      group: publish-extension
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # release notes are built from the history
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: blender-extension
+          path: dist
+
+      - name: Upload the version
+        env:
+          TOKEN: ${{ secrets.BLENDER_EXTENSIONS_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TOKEN:-}" ]; then
+            echo "::error::BLENDER_EXTENSIONS_TOKEN is not set. Create the token on your extensions.blender.org profile page and add it as a repository secret."
+            exit 1
+          fi
+
+          zip=$(ls dist/*.zip)
+          echo "package: $zip ($(stat -c%s "$zip") bytes)"
+          unzip -p "$zip" blender_manifest.toml | grep -E '^(id|version|blender_version_min) ' || true
+
+          # release notes: the annotated tag message, else the commits it covers
+          notes=$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME" || true)
+          if [ -z "$notes" ]; then
+            prev=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
+            if [ -n "$prev" ]; then
+              notes=$(git log --no-merges --pretty='* %s' "$prev..$GITHUB_REF_NAME")
+            else
+              notes=$(git log --no-merges --pretty='* %s' -n 30 "$GITHUB_REF_NAME")
+            fi
+          fi
+          echo "release notes:"; echo "$notes"
+
+          # documented endpoint: https://developer.blender.org/docs/features/extensions/ci_cd/
+          code=$(curl -sS -o "$RUNNER_TEMP/response.json" -w '%{http_code}' \
+            -X POST "https://extensions.blender.org/api/v1/extensions/$PACKAGE_ID/versions/upload/" \
+            -H "Authorization:bearer $TOKEN" \
+            -F "version_file=@$zip" \
+            --form-string "release_notes=$notes")
+          echo "HTTP $code"
+          cat "$RUNNER_TEMP/response.json" || true
+
+          case "$code" in
+            2??) echo "::notice::uploaded -- it now waits in the moderation queue" ;;
+            401|403) echo "::error::the token was rejected (HTTP $code)"; exit 1 ;;
+            404) echo "::error::extension '$PACKAGE_ID' does not exist on the platform yet -- submit it once at https://extensions.blender.org/submit/, then re-run this job"; exit 1 ;;
+            *) echo "::error::upload failed (HTTP $code)"; exit 1 ;;
+          esac

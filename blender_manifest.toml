@@ -20,3 +20,20 @@ license = ["SPDX:GPL-3.0-or-later"]
 blender_version_min = "4.2.0"
 
 copyright = ["2026 Wei Shuai"]
+
+# Build settings.  Only the shipped add-on belongs in the package: the test
+# scripts, the dev symlink helper and CI config stay in the repository.
+# (No [permissions] table: the add-on touches no network, clipboard or camera
+# and reads and writes the .obj files the user opens, so nothing to declare.)
+[build]
+paths_exclude_pattern = [
+  "__pycache__/",
+  "/.git/",
+  "/.github/",
+  "/.gitignore",
+  "/.DS_Store",
+  "/dist/",
+  "/verify/",
+  "/dev-link.sh",
+  "/*.zip",
+]

@@ -1,0 +1,36 @@
+I
+800
+OBJ
+
+# Fixture for the automated tests: one quad, one animated triangle, one light.
+# Kept tiny on purpose; the format corners that matter are all here:
+#   * a comment before the globals (must survive as a global-region line)
+#   * TEXTURE / TEXTURE_NORMAL / NORMAL_METALNESS / GLOBAL_specular
+#   * VT rows with authored normals + UVs
+#   * IDX10 packing
+#   * ATTR_poly_os state hoisted out of geometry
+#   * an ANIM block holding a second TRIS, plus ANIM_show
+#   * LIGHT_PARAM after the commands (a raw command that must stay put)
+GLOBAL_specular	1
+TEXTURE	mini.png
+TEXTURE_NORMAL	mini_NRM.png
+NORMAL_METALNESS
+POINT_COUNTS	7 0 0 9
+
+VT	0	0	0	0	1	0	0	0
+VT	1	0	0	0	1	0	1	0
+VT	1	0	1	0	1	0	1	1
+VT	0	0	1	0	1	0	0	1
+VT	0.5	0.0	0.2	0	1	0	0.5	0.5
+VT	0.9	0.0	0.3	0	1	0	0.9	0.5
+VT	0.7	0.0	0.6	0	1	0	0.7	0.9
+IDX10	0 1 2 0 2 3 4 5 6
+
+ATTR_poly_os	1
+TRIS	0 6
+ANIM_begin
+	ANIM_rotate	0	1	0	0	90	0	1	sim/flightmodel2/misc/door_open_ratio
+	ANIM_show	0	0	sim/flightmodel2/misc/door_open_ratio
+	TRIS	6 3
+ANIM_end
+LIGHT_PARAM	airplane_prop	0.5	1.0	0.5
