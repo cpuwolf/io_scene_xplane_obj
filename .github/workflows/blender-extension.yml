@@ -10,7 +10,8 @@ name: Build extension package
 
 on:
   push:
-    tags: ["v*"]
+    tags:
+      - '*'
 
 permissions:
   contents: write          # create the draft release
