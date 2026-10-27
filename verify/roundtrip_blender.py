@@ -32,6 +32,7 @@ import time
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 import bpy                                                   # noqa: E402
+from mathutils import Vector
 
 argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 SAMPLES = argv[0] if argv else os.path.join(REPO, "verify", "fixtures")
@@ -115,6 +116,37 @@ def main():
         if w and w != "[]":
             print("  warn %s: %s" % (os.path.basename(h.get(XM.PROP_SOURCE)),
                                      w[:200]))
+
+    # ---- 1b. scale and axis: the importer must not scale or mirror ------
+    # X-Plane is metres with +Y up; Blender is metres with +Z up. The mapping is
+    # the rotation (x, y, z) -> (x, -z, y), so every distance is preserved and
+    # the model keeps its real size. Pin the whole transform here: a mirror
+    # would keep the spans but move the extremes, and would flip the model's
+    # left and right.
+    raw_lo, raw_hi = [1e9] * 3, [-1e9] * 3
+    for src in originals:
+        for row in OC.parse(src).vt:
+            for i, v in enumerate((row.px, row.py, row.pz)):
+                raw_lo[i] = min(raw_lo[i], v)
+                raw_hi[i] = max(raw_hi[i], v)
+    blo, bhi = [1e9] * 3, [-1e9] * 3
+    for ob in bpy.data.objects:
+        if ob.type != 'MESH' or not XM.is_batch(ob):
+            continue
+        for corner in ob.bound_box:
+            w = ob.matrix_world @ Vector(corner)
+            for i in range(3):
+                blo[i] = min(blo[i], w[i])
+                bhi[i] = max(bhi[i], w[i])
+    expect_lo = (raw_lo[0], -raw_hi[2], raw_lo[1])
+    expect_hi = (raw_hi[0], -raw_lo[2], raw_hi[1])
+    print("  size X %.3f  Y %.3f  Z %.3f m" % (tuple(bhi[i] - blo[i]
+                                                    for i in range(3))))
+    for i, axis in enumerate("XYZ"):
+        check(abs(blo[i] - expect_lo[i]) < 1e-4 and
+              abs(bhi[i] - expect_hi[i]) < 1e-4,
+              "axis %s: imported %.4f..%.4f, expected %.4f..%.4f (scale or "
+              "mirror bug)" % (axis, blo[i], bhi[i], expect_lo[i], expect_hi[i]))
 
     # ---- 2. export straight back, expect byte identity ------------------
     print("\nexport #1 (untouched):")
