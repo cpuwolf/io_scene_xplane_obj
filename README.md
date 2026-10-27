@@ -70,21 +70,25 @@ debugged without starting Blender.
 1. bump `version` in `blender_manifest.toml`
 2. `git tag v<same version> && git push --tags`
 
-CI (`.github/workflows/blender-extension.yml`) then
+The `v*` tag runs `.github/workflows/blender-extension.yml`, which builds
+`io_scene_xplane_obj-<version>.zip` with `blender --command extension build`,
+validates it and keeps it as the `blender-extension` build artifact. Download it
+from the run page and upload it at
+<https://extensions.blender.org/submit/>; it appears publicly once the moderation
+team approves it.
 
-* runs the codec tests and the headless import/export round trip on Blender
-  4.2 (the manifest's floor) and the current release,
-* builds and validates the package, asserts only the add-on ships in it,
-* installs the built zip and re-runs the functional test through the installed
-  package (a file the build wrongly excluded fails there),
-* attaches the zip and `SHA256SUMS` to the GitHub release,
-* uploads the version to extensions.blender.org, where it waits in the
-  moderation queue.
+What ends up in the zip is decided by `[build] paths_exclude_pattern` in the
+manifest: the add-on modules, `LICENSE` and this README. The test fixtures, the
+dev symlink helper and the CI config stay in the repository.
 
-Two one-time steps on the platform: submit the add-on once via
-<https://extensions.blender.org/submit/> (the API only adds *versions* to an
-extension that already exists), and put the API token from your profile page
-into the `BLENDER_EXTENSIONS_TOKEN` repository secret.
+Tests are not part of the release build — run them yourself:
+
+```sh
+python3 verify/test_codec.py verify/fixtures
+python3 verify/test_fixture.py
+blender -b --factory-startup --python verify/roundtrip_blender.py -- verify/fixtures
+```
+
 
 ## License
 
