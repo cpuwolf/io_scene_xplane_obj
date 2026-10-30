@@ -178,6 +178,15 @@ class EXPORT_OT_xplane_obj(bpy.types.Operator, ExportHelper):
         name="UV map", default="",
         description="UV layer to export (empty = active layer)")
 
+    patch_obj: BoolProperty(
+        name="Write .patch.obj",
+        description="Also write <name>.patch.obj next to the file: the variant "
+                    "Ortho4XP reads as a mesh patch (ANCHOR on line 1, geometry "
+                    "only). The ANCHOR longitude/latitude is taken from the "
+                    "Ortho4XP tile in the scene, its altitude and heading are 0. "
+                    "This file is not a valid X-Plane object",
+        default=False)
+
     def invoke(self, context, event):
         obj = context.active_object
         header = _find_header(obj)
@@ -192,6 +201,11 @@ class EXPORT_OT_xplane_obj(bpy.types.Operator, ExportHelper):
         if self.mode == 'WRITE_BACK':
             return self._write_back(context)
         return self._write_one(context)
+
+    def _patch_path(self, dst):
+        if not self.patch_obj:
+            return None
+        return os.path.splitext(dst)[0] + ".patch.obj"
 
     def _headers(self, context):
         seen = []
@@ -220,7 +234,8 @@ class EXPORT_OT_xplane_obj(bpy.types.Operator, ExportHelper):
                 stats = XM.export_header(context, header, dst,
                                          uv_name=self.uv_layer or None,
                                          preserve=self.preserve_unmodified,
-                                         report=self.report)
+                                         report=self.report,
+                                         patch_path=self._patch_path(dst))
             except (OSError, ValueError) as exc:
                 self.report({'ERROR'}, "%s: %s" % (os.path.basename(dst), exc))
                 continue
@@ -248,7 +263,8 @@ class EXPORT_OT_xplane_obj(bpy.types.Operator, ExportHelper):
                 stats = XM.export_header(context, header, self.filepath,
                                          uv_name=self.uv_layer or None,
                                          preserve=self.preserve_unmodified,
-                                         report=self.report)
+                                         report=self.report,
+                                         patch_path=self._patch_path(self.filepath))
             except (OSError, ValueError) as exc:
                 self.report({'ERROR'}, str(exc))
                 return {'CANCELLED'}
@@ -264,7 +280,8 @@ class EXPORT_OT_xplane_obj(bpy.types.Operator, ExportHelper):
         try:
             stats = XM.export_unparented_objects(
                 context, self.filepath, meshes,
-                uv_name=self.uv_layer or None, report=self.report)
+                uv_name=self.uv_layer or None, report=self.report,
+                patch_path=self._patch_path(self.filepath))
         except (OSError, ValueError) as exc:
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}

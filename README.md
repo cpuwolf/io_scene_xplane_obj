@@ -34,6 +34,36 @@ Triangle winding is flipped on both sides: X-Plane calls a *clockwise* triangle
 the front face, Blender a counter-clockwise one. Forgetting this makes every
 model render inside-out — no error, just invisible surfaces.
 
+## Ortho4XP mesh patches
+
+Tick **Write .patch.obj** on the export dialog and a sibling file is written next to the
+`.obj`: `<name>.patch.obj`, the form Ortho4XP reads as a *terrain patch*
+(`O4_Vector_Map.keep_obj8`, step 1). One `.obj` in, two files out.
+
+| | `<name>.obj` | `<name>.patch.obj` |
+|---|---|---|
+| header block `I / 800 / OBJ` | yes | no |
+| `ANCHOR` | no | line 1 |
+| contents | globals, commands, animation | `VT` + `IDX10`/`IDX` + `TRIS` only |
+| read by | X-Plane | Ortho4XP |
+
+`ANCHOR` is not part of the X-Plane OBJ8 format (the spec puts an object's 0,0,0 wherever the
+scenery places it), and Ortho4XP needs it on line 1 — so the two forms cannot be one file.
+
+* The **longitude/latitude** is taken from the Ortho4XP tile in the scene: an import with the
+  *X-Plane DSF and Ortho4XP Mesh* add-on leaves `mesh_georef` on its object, and the anchor is
+  that frame's origin (the tile centre). Both are written as the frame's `lon0`/`lat0`, so the
+  patch's `VT` columns are the object's own metres, unchanged.
+* **Altitude and heading are 0.** Height therefore comes straight from the `VT` heights
+  (absolute metres), and the axes are not rotated.
+* No tile in the scene: the export still writes the normal `.obj` and reports a warning, the
+  `.patch.obj` is skipped.
+
+Drop the patch into `Patches/<lat tens><lon tens>/<+LL+LLL>/<any folder>/` and rebuild steps
+1–2 of the tile. It contributes geometry and height only: no texture, no UV, and vertical faces
+collapse, because the mesh is a height field. A patch belongs on a *scenery* object — an
+aircraft's geometry exported this way would put the whole aircraft into the terrain.
+
 ## Where the X-Plane data lives
 
 One `.obj` becomes one Empty plus one mesh per geometry command. Blender has no

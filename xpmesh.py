@@ -860,9 +860,71 @@ def _unmodified(context, header, uv_name):
     return True
 
 
+def patch_anchor(context, origin_obj=None):
+    """(lon, lat, alt, heading) for an Ortho4XP ANCHOR, or None without a tile.
+
+    VT rows are written in the object frame of the imported tile -- metres,
+    X east / Y up / Z south, origin at the tile centre -- so the anchor is that
+    frame's origin, not the object's own position: (lon0, lat0, 0, 0).  With alt
+    0 the VT heights stay absolute MSL; heading 0 leaves the axes alone.
+    """
+    g = _georef_of(origin_obj) if origin_obj is not None else None
+    if g is None:
+        for ob in context.scene.objects:
+            g = _georef_of(ob)
+            if g is not None:
+                break
+    if g is None:
+        return None
+    return (g["lon0"], g["lat0"], 0.0, 0.0)
+
+
+def _georef_of(obj):
+    """The `mesh_georef` JSON an Ortho4XP tile import leaves on its object."""
+    if obj is None:
+        return None
+    raw = obj.get("mesh_georef")
+    if not raw:
+        return None
+    try:
+        g = json.loads(raw)
+    except ValueError:
+        return None
+    for key in ("lon0", "lat0", "m_per_deg_lon", "m_per_deg_lat"):
+        if key not in g:
+            return None
+    return g
+
+
+def _write_patch(path, vt_text, idx_values, anchor, report=None):
+    """Write the Ortho4XP patch sibling; returns (verts, tris) or None."""
+    if anchor is None:
+        if report:
+            report({'WARNING'},
+                   "%s skipped: no Ortho4XP tile in the scene. Import the tile "
+                   "with the Ortho4XP Mesh add-on (it stores 'mesh_georef') so "
+                   "the ANCHOR can be derived." % os.path.basename(path))
+        return None
+    try:
+        text = OC.emit_patch(vt_text, idx_values, anchor)
+    except (ValueError, IndexError, KeyError) as exc:
+        if report:
+            report({'WARNING'}, "%s: %s" % (os.path.basename(path), exc))
+        return None
+    with open(path, "wb") as f:
+        f.write(text.encode("latin-1", "replace"))
+    n_t = int(text.rsplit("TRIS", 1)[1].split()[1]) // 3
+    n_v = text.count("\nVT\t") + text.startswith("VT\t")
+    return int(n_v), n_t
+
+
 def export_header(context, header, filepath, uv_name=None, preserve=True,
-                  report=None):
-    """Write one OBJ8 file from a header Empty and its meshes."""
+                  report=None, patch_path=None):
+    """Write one OBJ8 file from a header Empty and its meshes.
+
+    ``patch_path`` additionally writes the Ortho4XP patch variant: the ANCHOR
+    line first and nothing but the geometry, since that is all Ortho4XP reads.
+    """
     template = _header_template(header)
     leaf_objs = _leaf_object_names(header)
     if not template.events:
@@ -871,6 +933,9 @@ def export_header(context, header, filepath, uv_name=None, preserve=True,
     if preserve and header.get(PROP_DUMP) and _unmodified(context, header, uv_name):
         with open(filepath, "wb") as f:
             f.write(header[PROP_DUMP].encode("latin-1", "replace"))
+        if patch_path:
+            _write_patch(patch_path, [r.text for r in template.vt],
+                         template.idx, patch_anchor(context, header), report)
         return {"verbatim": True, "objects": len(leaf_objs),
                 "vt": len(template.vt), "indices": len(template.idx)}
 
@@ -880,6 +945,9 @@ def export_header(context, header, filepath, uv_name=None, preserve=True,
                    leaf_spans=spans)
     with open(filepath, "wb") as f:
         f.write(text.encode("latin-1", "replace"))
+    if patch_path:
+        _write_patch(patch_path, vt_text, idx_values,
+                     patch_anchor(context, header), report)
     return {"verbatim": False, "objects": len(fps), "vt": len(vt_text),
             "indices": len(idx_values)}
 
@@ -894,7 +962,7 @@ def collect_scene_meshes(header, only_used=False):
 
 
 def export_unparented_objects(context, filepath, objects, uv_name=None,
-                              report=None):
+                              report=None, patch_path=None):
     """Write a brand new OBJ8 from loose mesh objects (no import needed)."""
     meshes = [ob for ob in objects if ob.type == 'MESH']
     if not meshes:
@@ -940,5 +1008,8 @@ def export_unparented_objects(context, filepath, objects, uv_name=None,
                    leaf_spans=spans)
     with open(filepath, "wb") as f:
         f.write(text.encode("latin-1", "replace"))
+    if patch_path:
+        _write_patch(patch_path, vt_text, idx_values,
+                     patch_anchor(context, meshes[0]), report)
     return {"verbatim": False, "objects": len(meshes), "vt": len(vt_text),
             "indices": len(idx_values)}

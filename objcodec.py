@@ -452,6 +452,49 @@ def pack_indices(values, per_line=10, seps=("\t", " ")):
         yield "IDX" + sep_kw + "%d" % values[i]
 
 
+# ---------------------------------------------------------------------------
+# Ortho4XP mesh patch
+# ---------------------------------------------------------------------------
+#
+# Ortho4XP's `O4_Vector_Map.keep_obj8` reads an OBJ8-shaped file that is NOT a
+# valid X-Plane object: the first line must be ANCHOR, and it only looks at VT,
+# IDX/IDX10 and TRIS.  Everything else in an OBJ8 (header block, TEXTURE,
+# ATTR_*, commands) is ignored, and because ANCHOR has to come first, the
+# I/800/OBJ header cannot be there.  So a patch is written as a separate file.
+
+#: ANCHOR <lon> <lat> <alt> <heading> -- ortho4xp accepts four values; plain
+#: OBJ8 files never carry this line at all
+ANCHOR_FMT = "ANCHOR\t%.7f\t%.7f\t%.3f\t%.3f"
+
+
+def emit_patch(vt_text, idx_values, anchor):
+    """Text of the Ortho4XP patch OBJ8 for the given tables.
+
+    ``vt_text`` are VT row bodies ("x y z nx ny nz s t", X-Plane metres), and
+    ``idx_values`` the triangles' indices into them.  ``anchor`` is
+    ``(lon, lat, alt, heading)``: with alt 0 the VT heights are taken as
+    absolute MSL altitudes, which is what an object's own coordinates already
+    are when the object is authored at ground level.
+    """
+    if anchor is None:
+        raise ValueError("an ANCHOR is required")
+    vals = [int(v) for v in idx_values]
+    if not vals:
+        raise ValueError("no triangles to write")
+    out = [ANCHOR_FMT % (float(anchor[0]), float(anchor[1]),
+                         float(anchor[2]), float(anchor[3]))]
+    remap = {}
+    for old in sorted(set(vals)):
+        row = vt_text[old].split()
+        x, y, z = float(row[0]), float(row[1]), float(row[2])
+        remap[old] = len(remap)
+        out.append("VT\t%.3f\t%.3f\t%.3f\t0\t1\t0\t0\t0" % (x, y, z))
+    out.extend(pack_indices([remap[v] for v in vals]))
+    out.append("")
+    out.append("TRIS\t0\t%d" % len(vals))
+    return "\n".join(out) + "\n"
+
+
 def replace_counts(line, counts):
     """Rewrite a POINT_COUNTS line, keeping the original white space."""
     parts = re.split(r"(\s+)", line)
