@@ -34,6 +34,31 @@ Triangle winding is flipped on both sides: X-Plane calls a *clockwise* triangle
 the front face, Blender a counter-clockwise one. Forgetting this makes every
 model render inside-out — no error, just invisible surfaces.
 
+## Export writes the selection
+
+**File > Export > X-Plane OBJ8** writes what is selected, nothing else:
+
+| selection | what the file gets |
+| --- | --- |
+| the header Empty — the object itself | every part; byte for byte when nothing was edited |
+| one or more mesh parts | only those parts' geometry |
+| nothing | the whole scene: one imported object → that object, byte for byte; several → all meshes flattened into one file (command streams dropped, with a warning) |
+| objects of several files at once | one file (the active object's); the others are skipped with a warning |
+
+A partial export keeps the file's **command stream** — `ANIM_*`, `ATTR_manip_*`,
+`ATTR_LOD`, `LIGHT_*`, `TEXTURE`/`GLOBAL_*`, the `VLINE`/`VLIGHT` sections — so
+animations and manipulators survive; the dropped parts simply contribute no
+batch, the `VT` and index tables are rebuilt from the parts that were written,
+and `POINT_COUNTS` is recomputed to match. An `ATTR_LOD` level whose only
+geometry was dropped stays behind as an empty level; if X-Plane complains,
+remove the leftover lines from `xp8_events` on the header Empty.
+
+A subset is never the original text, so the byte-identical shortcut is off
+while parts are left out, and the dialog proposes `<name>_selected.obj` rather
+than the source path — a partial write must not overwrite the object it came
+from. **Back to source files** and the `.patch.obj` sibling follow the same
+selection.
+
 ## Ortho4XP mesh patches
 
 Tick **Write .patch.obj** on the export dialog and a sibling file is written next to the
@@ -108,6 +133,7 @@ or any geometry, differs from what was imported.
 python3 verify/test_codec.py verify/fixtures       # codec only, no Blender
 python3 verify/test_fixture.py                     # pinned expectations
 blender -b --factory-startup --python verify/roundtrip_blender.py -- verify/fixtures
+blender -b --factory-startup --python verify/check_selection.py   # export = selection
 
 # stronger: run the same tests against a real aircraft
 blender -b --factory-startup --python verify/roundtrip_blender.py -- \

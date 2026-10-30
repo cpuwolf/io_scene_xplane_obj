@@ -673,7 +673,7 @@ def corner_key(pos, nrm, uv):
 def object_fingerprint(context, ob, uv_name=None):
     """Hash of the geometry exactly as the exporter would read it."""
     got = triangle_corners(context, ob, uv_name)
-    if got is None:
+    if not got:                     # unreadable, or a mesh with no faces (LINES)
         return "unreadable"
     corners = got[0]
     m = np.array(export_matrix(ob), dtype=np.float64).ravel()
@@ -728,7 +728,8 @@ def _leaf_object_names(header):
         return []
 
 
-def build_tables(context, template, leaf_objects, uv_name=None, report=None):
+def build_tables(context, template, leaf_objects, uv_name=None, report=None,
+                 skip=None):
     """Meshes -> (vt row texts, index table, spans per leaf index, fingerprints).
 
     VT rows a vertex still matches are reused with their original text, so a
@@ -736,6 +737,9 @@ def build_tables(context, template, leaf_objects, uv_name=None, report=None):
     match cannot be exact: Blender stores custom normals as int16 per axis, so
     every normal comes back ~3e-5 off (positions and UVs are exact).  Hence a
     coarse bucket lookup plus a tolerance check.
+
+    ``skip`` is a set of leaf indices to leave out entirely: their object is not
+    read and their indices never enter the table (a partial export).
     """
     orig_rows = template.vt
     orig_by_key = {}
@@ -777,10 +781,13 @@ def build_tables(context, template, leaf_objects, uv_name=None, report=None):
     used = [False] * len(texts)
     key_to_index = {}
     idx_values = []
+    idx_is_vt = []        # parallel to idx_values: does the value index the VT table?
     spans = {}
     fps = {}
 
     for leaf_index, name in enumerate(leaf_objects):
+        if skip and leaf_index in skip:
+            continue
         ob = bpy.data.objects.get(name) if name else None
         if ob is None:
             if report:
@@ -791,8 +798,10 @@ def build_tables(context, template, leaf_objects, uv_name=None, report=None):
         leaf = template.leaves[leaf_index] if leaf_index < len(template.leaves) else None
         if leaf is not None and leaf.kind == "LINES":
             # line primitives are not edited through the mesh: reuse the indices
+            # (their values index the VLINE table, not VT: no remap below)
             offset = len(idx_values)
             idx_values.extend(leaf.indices)
+            idx_is_vt.extend([False] * len(leaf.indices))
             spans[leaf_index] = (offset, len(leaf.indices))
             continue
         if ob.type != 'MESH':
@@ -824,6 +833,7 @@ def build_tables(context, template, leaf_objects, uv_name=None, report=None):
                 used[slot] = True
             key_to_index[key] = slot
             idx_values.append(slot)
+            idx_is_vt.append(True)
             parts.append(("%d,%d,%d,%d,%d,%d,%d,%d|" % key).encode())
         spans[leaf_index] = (offset, len(corners))
         m = np.array(export_matrix(ob), dtype=np.float64).ravel()
@@ -834,8 +844,10 @@ def build_tables(context, template, leaf_objects, uv_name=None, report=None):
     remap = dict((old, new) for new, old in enumerate(keep))
     vt_text = [texts[i] for i in keep]
     # note: span offsets point into the index table, which compaction of the
-    # vertex table does not move -- only the values change
-    idx_values = [remap[v] for v in idx_values]
+    # vertex table does not move -- only the values change.  LINES values index
+    # the VLINE table, which is never compacted, so those stay as they are.
+    idx_values = [remap[v] if is_vt else v
+                  for v, is_vt in zip(idx_values, idx_is_vt)]
     return vt_text, idx_values, spans, fps
 
 
@@ -919,16 +931,41 @@ def _write_patch(path, vt_text, idx_values, anchor, report=None):
 
 
 def export_header(context, header, filepath, uv_name=None, preserve=True,
-                  report=None, patch_path=None):
+                  report=None, patch_path=None, only=None):
     """Write one OBJ8 file from a header Empty and its meshes.
 
     ``patch_path`` additionally writes the Ortho4XP patch variant: the ANCHOR
     line first and nothing but the geometry, since that is all Ortho4XP reads.
+
+    ``only`` restricts the *geometry* to these object names -- the parts that
+    are selected.  The command stream is still written as it always is
+    (ANIM_*, ATTR_manip_*, LIGHT_*, ATTR_LOD, the VLINE/VLIGHT sections), so the
+    animation blocks survive; a dropped part just contributes no batch and
+    POINT_COUNTS is recomputed.  ``None`` writes every part.
     """
     template = _header_template(header)
     leaf_objs = _leaf_object_names(header)
     if not template.events:
         template.events = [(OC.EV_LEAF, i) for i in range(len(leaf_objs))]
+
+    skip = set()
+    if only is not None:
+        keep = set(only)
+        skip = set(i for i, n in enumerate(leaf_objs) if n not in keep)
+        if skip:
+            if len(skip) == len(leaf_objs):
+                raise ValueError("none of the selected objects is a geometry "
+                                 "part of %s" % header.name)
+            # a dropped part must not be emitted either: its batch has no rows
+            # in the new index table any more
+            template.events = [(k, p) for k, p in template.events
+                               if not (k == OC.EV_LEAF and p in skip)]
+            if report:
+                report({'INFO'}, "%s: %d of %d parts selected"
+                       % (os.path.basename(filepath), len(leaf_objs) - len(skip),
+                          len(leaf_objs)))
+            # a subset is never the original text, so no verbatim shortcut
+            preserve = False
 
     if preserve and header.get(PROP_DUMP) and _unmodified(context, header, uv_name):
         with open(filepath, "wb") as f:
@@ -940,7 +977,7 @@ def export_header(context, header, filepath, uv_name=None, preserve=True,
                 "vt": len(template.vt), "indices": len(template.idx)}
 
     vt_text, idx_values, spans, fps = build_tables(
-        context, template, leaf_objs, uv_name, report=report)
+        context, template, leaf_objs, uv_name, report=report, skip=skip)
     text = OC.emit(template, vt_text=vt_text, idx_values=idx_values,
                    leaf_spans=spans)
     with open(filepath, "wb") as f:

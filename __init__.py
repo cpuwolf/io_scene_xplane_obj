@@ -160,10 +160,10 @@ class EXPORT_OT_xplane_obj(bpy.types.Operator, ExportHelper):
         name="Write",
         items=[
             ('FILE', "One file",
-             "Write the selected X-Plane object, or the selected meshes, "
-             "to the file name below"),
+             "Write the selected X-Plane object, or the selected parts / "
+             "meshes, to the file name below"),
             ('WRITE_BACK', "Back to source files",
-             "Write every imported X-Plane object back to the path it came "
+             "Write every selected X-Plane object back to the path it came "
              "from (or into the folder below)"),
         ],
         default='FILE')
@@ -193,7 +193,12 @@ class EXPORT_OT_xplane_obj(bpy.types.Operator, ExportHelper):
         if header is not None:
             src = header.get(XM.PROP_SOURCE)
             if src:
-                self.filepath = src
+                parts = self._selection(context).get(header)
+                if parts is not None:
+                    # a subset must not default to overwriting the whole file
+                    self.filepath = os.path.splitext(src)[0] + "_selected.obj"
+                else:
+                    self.filepath = src
         self.mode = 'FILE'
         return ExportHelper.invoke(self, context, event)
 
@@ -207,21 +212,45 @@ class EXPORT_OT_xplane_obj(bpy.types.Operator, ExportHelper):
             return None
         return os.path.splitext(dst)[0] + ".patch.obj"
 
-    def _headers(self, context):
-        seen = []
-        for ob in bpy.data.objects:
-            if XM.is_header(ob) and ob not in seen:
-                seen.append(ob)
-        return seen
+    def _selection(self, context):
+        """What is selected right now: {header: None | [part, ...]}.
+
+        ``None`` means the header Empty itself is selected, i.e. the whole
+        object; a list holds the parts selected under it.  Objects outside an
+        imported X-Plane object (a loose mesh) never appear here.
+        """
+        out = {}
+        for ob in context.selected_objects:
+            header = _find_header(ob)
+            if header is None:
+                continue
+            if ob is header:
+                out[header] = None          # the object itself: every part
+            elif header in out:
+                if out[header] is not None:
+                    out[header].append(ob)
+            else:
+                out[header] = [ob]
+        return out
+
+    def _scene_headers(self, context):
+        return [ob for ob in context.scene.objects if XM.is_header(ob)]
 
     def _write_back(self, context):
-        headers = self._headers(context)
-        if not headers:
+        picked = self._selection(context)
+        if not picked:
+            if context.selected_objects:
+                self.report({'ERROR'}, "the selection holds no imported "
+                                       "X-Plane object")
+                return {'CANCELLED'}
+            # nothing selected: every imported object in the scene
+            picked = dict((h, None) for h in self._scene_headers(context))
+        if not picked:
             self.report({'ERROR'}, "no imported X-Plane objects in this scene")
             return {'CANCELLED'}
         target_dir = os.path.dirname(self.filepath)
         ok = verbatim = 0
-        for header in headers:
+        for header, parts in picked.items():
             src = header.get(XM.PROP_SOURCE) or ""
             if src and os.path.isdir(os.path.dirname(src)):
                 dst = src
@@ -231,11 +260,13 @@ class EXPORT_OT_xplane_obj(bpy.types.Operator, ExportHelper):
             else:
                 continue
             try:
-                stats = XM.export_header(context, header, dst,
-                                         uv_name=self.uv_layer or None,
-                                         preserve=self.preserve_unmodified,
-                                         report=self.report,
-                                         patch_path=self._patch_path(dst))
+                stats = XM.export_header(
+                    context, header, dst,
+                    uv_name=self.uv_layer or None,
+                    preserve=self.preserve_unmodified,
+                    report=self.report,
+                    patch_path=self._patch_path(dst),
+                    only=None if parts is None else [ob.name for ob in parts])
             except (OSError, ValueError) as exc:
                 self.report({'ERROR'}, "%s: %s" % (os.path.basename(dst), exc))
                 continue
@@ -246,25 +277,40 @@ class EXPORT_OT_xplane_obj(bpy.types.Operator, ExportHelper):
         return {'FINISHED'}
 
     def _write_one(self, context):
-        header = _find_header(context.active_object)
-        if header is None:
-            for ob in context.selected_objects:
-                header = _find_header(ob)
-                if header:
-                    break
-        if header is None:
-            # nothing selected: if the scene holds exactly one imported object,
-            # that is obviously the one the user means
-            headers = self._headers(context)
+        picked = self._selection(context)
+        selected = list(context.selected_objects)
+        if not picked and not selected:
+            # nothing selected: the whole scene.  One object can be written
+            # with its command stream; several can only be flattened into one
+            # file (an .obj is one header + its batches).
+            headers = self._scene_headers(context)
             if len(headers) == 1:
-                header = headers[0]
-        if header is not None:
+                picked = {headers[0]: None}
+            elif headers:
+                self.report({'WARNING'},
+                            "nothing selected: %d objects in the scene go into "
+                            "one file, their command streams (animation, "
+                            "manipulators) are dropped. Select one object to "
+                            "keep them" % len(headers))
+        header = None
+        if picked:
+            header = _find_header(context.active_object)
+            if header not in picked:
+                header = next(iter(picked))
+            assert header is not None           # picked is not empty here
+            if len(picked) > 1:
+                self.report({'WARNING'},
+                            "selection spans %d objects; one file per export, "
+                            "writing %s only" % (len(picked), header.name))
+            parts = picked[header]
             try:
-                stats = XM.export_header(context, header, self.filepath,
-                                         uv_name=self.uv_layer or None,
-                                         preserve=self.preserve_unmodified,
-                                         report=self.report,
-                                         patch_path=self._patch_path(self.filepath))
+                stats = XM.export_header(
+                    context, header, self.filepath,
+                    uv_name=self.uv_layer or None,
+                    preserve=self.preserve_unmodified,
+                    report=self.report,
+                    patch_path=self._patch_path(self.filepath),
+                    only=None if parts is None else [ob.name for ob in parts])
             except (OSError, ValueError) as exc:
                 self.report({'ERROR'}, str(exc))
                 return {'CANCELLED'}
@@ -274,9 +320,13 @@ class EXPORT_OT_xplane_obj(bpy.types.Operator, ExportHelper):
                            " (verbatim)" if stats["verbatim"] else ""))
             return {'FINISHED'}
 
-        meshes = [ob for ob in context.selected_objects if ob.type == 'MESH']
-        if not meshes:
+        meshes = [ob for ob in selected if ob.type == 'MESH']
+        if not meshes and not selected:
+            # nothing selected at all: every mesh in the scene
             meshes = [ob for ob in context.scene.objects if ob.type == 'MESH']
+        if not meshes:
+            self.report({'ERROR'}, "no mesh objects to export")
+            return {'CANCELLED'}
         try:
             stats = XM.export_unparented_objects(
                 context, self.filepath, meshes,
