@@ -28,8 +28,9 @@ r = bpy.ops.import_scene.xplane_obj(filepath=SRC)
 print("import:", r)
 header = [o for o in bpy.data.objects if o.get("xp8_role") == "header"]
 print("header:", [h.name for h in header])
-print("parts:", [(c.name, len(c.data.polygons)) for c in header[0].children][:4])
-print("material:", [m.name for m in header[0].children[0].data.materials])
+_parts = [c for c in header[0].children if c.type == 'MESH']
+print("parts:", [(c.name, len(c.data.polygons)) for c in _parts][:4])
+print("material:", [m.name for m in _parts[0].data.materials])
 
 r = bpy.ops.export_scene.xplane_obj(filepath=DST, mode="FILE",
                                     preserve_unmodified=True)

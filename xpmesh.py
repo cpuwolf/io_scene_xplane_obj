@@ -37,6 +37,7 @@ import numpy as np
 from mathutils import Matrix, Vector
 
 from . import objcodec as OC
+from . import xpanim as XA
 
 # ---------------------------------------------------------------------------
 # constants and helpers
@@ -60,10 +61,17 @@ PROP_VT_ATTR = "xp8_vt"
 PROP_PLACEMENT = "xp8_placement"
 PROP_LEAF_STATES = "xp8_leaf_states"
 PROP_CMD_HASH = "xp8_cmd_hash"
+# animation rig (one Empty per animated batch)
+PROP_DATAREF = "xp8_dataref"
+PROP_ANIM_RANGE = "xp8_anim_range"
+PROP_ANIM_DATAREFS = "xp8_anim_datarefs"
+PROP_ANIM_VIS = "xp8_anim_vis"
+PROP_ANIM_ACTION = "xp8_anim_action"
 
 ROLE_HEADER = "header"
 ROLE_TRIS = "tris"
 ROLE_LINES = "lines"
+ROLE_RIG = "rig"
 
 # quantisation used for VT de-duplication and for the "did the geometry change"
 # fingerprint.  0.1 mm on position, 1e-4 on a normal, 1e-5 on a UV -- well below
@@ -114,15 +122,21 @@ def command_hash(header):
 
 
 def export_matrix(ob):
-    """The transform geometry is written with: the object's own frame.
+    """The transform geometry is written with: the file's own frame.
 
-    A part modelled at the file origin and placed by a static `ANIM_trans` (the
-    gear legs of most aircraft objects) is moved to its real position at import
-    so it can be edited where it belongs.  That offset belongs to the file, not
-    to the geometry, so export has to take it back out -- otherwise a saved file
-    would have the gear translated twice.
+    Two things must not reach the file:
+
+    * the **animation rigs**.  A part is displayed at the pose the dataref
+      selects (or wherever its baked Action puts it), but the vertices in the
+      file are authored in the object frame.  So the parent chain is walked and
+      rig Empties are skipped: what is left is exactly what the user set on the
+      object itself.  No inverse, no float noise -- an untouched round trip is
+      byte identical.
+    * the legacy `xp8_placement`.  Older imports stored a static ANIM_trans
+      offset on the object and subtracted it here; keep honouring it so those
+      scenes still export correctly.
     """
-    m = ob.matrix_world.copy()
+    m = _chain_matrix(ob)
     raw = ob.get(PROP_PLACEMENT)
     if not raw:
         return m
@@ -133,6 +147,27 @@ def export_matrix(ob):
     if len(p) != 3:
         return m
     return Matrix.Translation(Vector((-p[0], -p[1], -p[2]))) @ m
+
+
+def _chain_matrix(ob):
+    """Local transform of `ob` in the frame of its nearest non-rig ancestor."""
+    chain = []
+    node = ob
+    hops = 0
+    while node is not None and hops < 64:
+        chain.append(node)
+        node = node.parent
+        hops += 1
+    m = Matrix.Identity(4)
+    for node in reversed(chain):
+        if node.get(PROP_ROLE) == ROLE_RIG:
+            continue                # preview only: never part of the file
+        m = m @ (node.matrix_parent_inverse @ node.matrix_basis)
+    return m
+
+
+def is_rig(obj):
+    return obj is not None and obj.get(PROP_ROLE) == ROLE_RIG
 
 
 def is_header(obj):
@@ -341,43 +376,151 @@ def _parse_line_rows(rows):
     return out
 
 
-def constant_translations(obj8):
-    """leaf index -> accumulated static ANIM_trans, in X-Plane axes.
+def parse_overrides(text):
+    """'dref=value, dref=value' -> {dref: float}."""
+    out = {}
+    for piece in (text or "").replace(";", ",").split(","):
+        piece = piece.strip()
+        if not piece or "=" not in piece:
+            continue
+        name, _, value = piece.rpartition("=")
+        try:
+            out[name.strip()] = float(value)
+        except ValueError:
+            continue
+    return out
 
-    Aircraft objects model a part at the file origin and move it into place with
-    a *static* translate, written as ``ANIM_trans x y z x y z`` (both ends the
-    same, with or without a trailing ``0 0 no_ref``).  X-Plane applies that at
-    runtime, which is why the raw geometry of, say, a main gear leg sits at the
-    aircraft reference point.  Translates whose two ends differ are animated and
-    are left alone.
+
+def pose_at(anim, position, overrides=None):
+    """{dataref: value} at a timeline position.
+
+    Each dataref sweeps its own keyed range (0..180 for a flap, 0..1 for a
+    gear), so position 1.0 means "every animation at its far end", which is
+    what "extended" looks like for most aircraft parts.
     """
-    totals = {}
-    stack = [[0.0, 0.0, 0.0]]
-    for kind, payload in obj8.events:
-        if kind == OC.EV_ANIM_BEGIN:
-            stack.append([0.0, 0.0, 0.0])
-        elif kind == OC.EV_ANIM_END:
-            if len(stack) > 1:
-                stack.pop()
-        elif kind == OC.EV_RAW and payload:
-            words = payload.split()
-            if words and words[0] == "ANIM_trans" and len(words) >= 7:
-                try:
-                    v = [float(w) for w in words[1:7]]
-                except ValueError:
-                    continue
-                if v[0] == v[3] and v[1] == v[4] and v[2] == v[5]:
-                    for i in range(3):
-                        stack[-1][i] += v[i]
-        elif kind == OC.EV_LEAF:
-            totals[payload] = tuple(sum(level[i] for level in stack)
-                                    for i in range(3))
-    return totals
+    pose = {}
+    for dref, (lo, hi) in anim.ranges().items():
+        pose[dref] = lo + (hi - lo) * position
+    if overrides:
+        pose.update(overrides)
+    return pose
+
+
+def _rig_for(context, coll, header, name, m_bl):
+    """An Empty that carries one batch's animation (preview only)."""
+    rig = bpy.data.objects.new(name, None)
+    rig.empty_display_type = 'PLAIN_AXES'
+    rig.empty_display_size = 0.15
+    rig[PROP_ROLE] = ROLE_RIG
+    rig.rotation_mode = 'QUATERNION'
+    coll.objects.link(rig)
+    rig.parent = header
+    rig.matrix_parent_inverse.identity()
+    rig.matrix_basis = Matrix([list(row) for row in m_bl])
+    return rig
+
+
+#: samples along the time line: frame 1 .. frame SAMPLES is dataref min .. max
+SAMPLES = 101
+
+
+def _fcurve(action, ob, data_path, index):
+    """An F-Curve on either the 4.2 API or the 5.x layered one."""
+    legacy = getattr(action, "fcurves", None)
+    if legacy is not None:
+        return legacy.new(data_path, index=index)
+    return action.fcurve_ensure_for_datablock(ob, data_path, index=index)
+
+
+def _write_curve(action, ob, data_path, index, frames, values):
+    fc = _fcurve(action, ob, data_path, index)
+    n = len(frames)
+    fc.keyframe_points.add(n)
+    co = []
+    for f, v in zip(frames, values):
+        co.append(float(f))
+        co.append(float(v))
+    fc.keyframe_points.foreach_set("co", co)
+    # a dataref is linearly interpolated by the sim, so the preview must be too
+    for kp in fc.keyframe_points:
+        kp.interpolation = 'LINEAR'
+    fc.update()
+
+
+def bake_rig_action(rig, anim, leaf, overrides=None):
+    """Bake one batch's animation into an Action on its rig.
+
+    Blender cannot read a dataref, so the time line *is* the dataref: frame 1
+    is every dataref at its lowest keyed value, frame SAMPLES at its highest.
+    Dragging the time line therefore plays the animation the way the sim would.
+    """
+    rng = anim.ranges()
+    frames = list(range(1, SAMPLES + 1))
+    locs, quats = [], []
+    prev = None
+    for i, frame in enumerate(frames):
+        t = i / (SAMPLES - 1.0)
+        pose = {d: lo + (hi - lo) * t for d, (lo, hi) in rng.items()}
+        if overrides:
+            pose.update(overrides)
+        m = Matrix([list(r) for r in XA.to_bl(anim.matrix_at(pose, leaf))])
+        loc, quat, _scale = m.decompose()
+        if prev is not None and quat.dot(prev) < 0.0:
+            quat.negate()          # keep the shortest arc between keys
+        prev = quat
+        locs.append(loc)
+        quats.append(quat)
+
+    action = bpy.data.actions.new(rig.name + "_anim")
+    action.use_fake_user = True
+    rig.animation_data_create()
+    rig.animation_data.action = action    # 5.x needs the slot before curves
+    for axis in range(3):
+        _write_curve(action, rig, "location", axis, frames,
+                     [v[axis] for v in locs])
+    for axis in range(4):
+        _write_curve(action, rig, "rotation_quaternion", axis, frames,
+                     [q[axis] for q in quats])
+    rig[PROP_ANIM_ACTION] = action.name
+    return action
+
+
+def _chain_datarefs(chain):
+    out = []
+    for block in chain:
+        for cmd in block.commands:
+            dref = cmd.get("dataref")
+            if dref and dref not in out:
+                out.append(dref)
+    return out
+
+
+def _chain_visibility(chain):
+    out = []
+    for block in chain:
+        for cmd in block.commands:
+            if cmd["kind"] in (XA.CMD_SHOW, XA.CMD_HIDE):
+                out.append([cmd["kind"], cmd["v1"], cmd["v2"],
+                            cmd.get("dataref") or ""])
+    return out
 
 
 def import_file(context, path, into_collection=None, report=None,
-                place_parts=True):
-    """Import one .obj file.  Returns the header Empty (or None on failure)."""
+                place_parts=True, anim_position=0.0, anim_overrides="",
+                bake_actions=True):
+    """Import one .obj file.  Returns the header Empty (or None on failure).
+
+    With `place_parts` every batch inside an ANIM_begin/ANIM_end block gets a
+    rig Empty holding the transform its datarefs select at `anim_position`
+    (0..1 of each dataref's keyed range), so the part sits where the sim would
+    draw it instead of piled up at the file origin.  Unless `bake_actions` is
+    off, that rig also gets an Action sweeping the whole range over the time
+    line, which is the only way a dataref-driven animation can be *seen* in
+    Blender.
+
+    The rigs are preview only: `export_matrix` skips them, so an untouched
+    import is still written back byte for byte.
+    """
     path = os.path.abspath(path)
     with open(path, "rb") as f:
         raw = f.read()
@@ -402,10 +545,20 @@ def import_file(context, path, into_collection=None, report=None,
 
     mat = build_material(obj8, obj_dir, base)
 
+    anim = None
+    ranges = {}
+    pose = {}
+    overrides = {}
+    if place_parts:
+        anim = XA.build(obj8)
+        warnings.extend(anim.warnings)
+        ranges = anim.ranges()
+        overrides = parse_overrides(anim_overrides)
+        pose = pose_at(anim, anim_position, overrides)
+
     leaf_objs = [None] * len(obj8.leaves)
     vline_pts = _parse_line_rows(obj8.vline)
-    placed = constant_translations(obj8) if place_parts else {}
-    n_placed = 0
+    rigs = []
 
     for leaf_index, leaf in enumerate(obj8.leaves):
         if leaf.kind == "TRIS":
@@ -421,14 +574,30 @@ def import_file(context, path, into_collection=None, report=None,
         ob.parent = header
         ob.matrix_parent_inverse.identity()
         ob[PROP_LEAF] = leaf_index
-        offset = placed.get(leaf_index)
-        if offset and any(abs(v) > 1e-9 for v in offset):
-            loc = xp_to_bl(offset)
-            ob.location = loc
-            # kept so that export can subtract it again and stay byte identical
-            ob[PROP_PLACEMENT] = json.dumps(list(loc))
-            n_placed += 1
+        chain = (anim.leaves.get(leaf_index) or []) if anim is not None else []
+        if any(block.commands for block in chain):
+            drefs = _chain_datarefs(chain)
+            rig = _rig_for(context, coll, header,
+                           "%s_%03d_anim" % (base, leaf_index),
+                           XA.to_bl(anim.matrix_at(pose, leaf_index)))
+            rig[PROP_LEAF] = leaf_index
+            rig[PROP_ANIM_DATAREFS] = json.dumps(drefs)
+            rig[PROP_DATAREF] = drefs[0] if drefs else ""
+            rig[PROP_ANIM_RANGE] = json.dumps(
+                list(ranges.get(drefs[0], (0.0, 1.0))) if drefs else (0.0, 1.0))
+            rig[PROP_ANIM_VIS] = json.dumps(_chain_visibility(chain))
+            ob.parent = rig
+            if not anim.visible_at(pose, leaf_index):
+                ob.hide_viewport = True
+                ob.hide_render = True
+            rigs.append((rig, leaf_index))
         leaf_objs[leaf_index] = ob.name
+
+    if rigs and bake_actions:
+        for rig, leaf_index in rigs:
+            bake_rig_action(rig, anim, leaf_index, overrides)
+        # the animated properties are now owned by the Actions
+        context.scene.frame_set(int(1 + round(anim_position * (SAMPLES - 1))))
 
     header[PROP_GLOBALS] = json.dumps(obj8.globals)
     header[PROP_EVENTS] = json.dumps([[k, p] for k, p in obj8.events])
@@ -439,6 +608,10 @@ def import_file(context, path, into_collection=None, report=None,
     header["xp8_version"] = obj8.version_line
     header["xp8_line_ending"] = {"\r\n": "crlf", "\r": "cr", "\n": "lf"}[
         obj8.line_ending]
+
+    # the rigs are parented and the matrices set: make sure the depsgraph has
+    # evaluated them before anything reads a matrix back
+    context.view_layer.update()
 
     # fingerprint the geometry we just built: export uses it to decide whether
     # the file can be written back verbatim
@@ -460,8 +633,8 @@ def import_file(context, path, into_collection=None, report=None,
     header.select_set(True)
     context.view_layer.objects.active = header
 
-    if n_placed:
-        header["xp8_placed_parts"] = n_placed
+    if rigs:
+        header["xp8_anim_parts"] = len(rigs)
     for w in warnings:
         if report:
             report({'WARNING'}, w)
@@ -930,8 +1103,114 @@ def _write_patch(path, vt_text, idx_values, anchor, report=None):
     return int(n_v), n_t
 
 
+# ---------------------------------------------------------------------------
+# export: writing the animation back out of Blender
+# ---------------------------------------------------------------------------
+
+#: one sample per time-line frame, so a baked Action is read back at the very
+#: frames it was written on
+def _sample_rigs(context, rigs):
+    """{rig name: [matrix_basis per frame]} with the Actions evaluated."""
+    scene = context.scene
+    frames = list(range(1, SAMPLES + 1))
+    out = dict((rig.name, []) for rig in rigs)
+    for frame in frames:
+        scene.frame_set(frame)
+        depsgraph = context.evaluated_depsgraph_get()
+        for rig in rigs:
+            ev = rig.evaluated_get(depsgraph)
+            out[rig.name].append(ev.matrix_basis.copy())
+    return out
+
+
+def _unwrap(values):
+    """Remove 360 degree jumps so a linear key table plays smoothly."""
+    out = []
+    for v in values:
+        if out:
+            while v - out[-1] > 180.0:
+                v -= 360.0
+            while v - out[-1] < -180.0:
+                v += 360.0
+        out.append(v)
+    return out
+
+
+def _anim_lines(rig, mats, report=None):
+    """ANIM_* lines for one batch, from the sampled rig transforms.
+
+    The file has no matrix animation: a rotation is a sequence of axis/angle
+    pairs, so the sampled rotation is decomposed into Euler XYZ and written as
+    up to three rotate blocks.  Read back in file order the blocks multiply as
+    Rz . Ry . Rx, which is exactly what `Euler('XYZ').to_matrix()` builds, so
+    the geometry lands where Blender shows it.
+    """
+    dataref = rig.get(PROP_DATAREF, "") or ""
+    if not dataref:
+        if report:
+            report({'WARNING'}, "%s: no dataref, animation not written"
+                   % rig.name)
+        return None
+    try:
+        v1, v2 = json.loads(rig.get(PROP_ANIM_RANGE, "[0, 1]"))
+    except (ValueError, TypeError):
+        v1, v2 = 0.0, 1.0
+    n = len(mats)
+    vs = [v1 + (v2 - v1) * (i / (n - 1.0)) for i in range(n)]
+
+    lines = []
+    for entry in json.loads(rig.get(PROP_ANIM_VIS, "[]") or "[]"):
+        kind, a, b, dref = entry
+        lines.append(XA.visibility_block(kind == XA.CMD_SHOW, a, b,
+                                        dref or dataref))
+
+    trans = [m.translation.copy() for m in mats]
+    spread = max(max(abs(t[i] - trans[0][i]) for t in trans) for i in range(3))
+    if spread > 1e-6:
+        keys = XA.simplify([(vs[i], tuple(trans[i])) for i in range(n)], 1e-4)
+        lines.extend(XA.trans_block(keys, dataref))
+    elif max(abs(v) for v in trans[0]) > 1e-6:
+        lines.append(XA.static_trans(tuple(trans[0])))
+
+    angles = {"X": [], "Y": [], "Z": []}
+    for m in mats:
+        euler = m.to_euler('XYZ')
+        for axis, value in zip("XYZ", euler):
+            angles[axis].append(math.degrees(value))
+    # outermost first: Rz @ Ry @ Rx
+    for axis in ("Z", "Y", "X"):
+        values = _unwrap(angles[axis])
+        if max(abs(v) for v in values) < 1e-6:
+            continue
+        keys = XA.simplify([(vs[i], values[i]) for i in range(n)], 0.005)
+        unit = {"X": (1.0, 0.0, 0.0), "Y": (0.0, 1.0, 0.0),
+                "Z": (0.0, 0.0, 1.0)}[axis]
+        lines.extend(XA.rotate_block(unit, keys, dataref))
+    return lines or None
+
+
+def build_anim_blocks(context, header, report=None):
+    """{leaf index: [ANIM_* lines]} regenerated from the rigs' Actions."""
+    rigs = [ob for ob in header.children if is_rig(ob)]
+    if not rigs:
+        return {}
+    samples = _sample_rigs(context, rigs)
+    out = {}
+    for rig in rigs:
+        leaf = rig.get(PROP_LEAF)
+        if leaf is None:
+            continue
+        mats = [XA.to_xp([[m[i][j] for j in range(4)] for i in range(4)])
+                for m in samples[rig.name]]
+        mats = [Matrix([list(row) for row in m]) for m in mats]
+        lines = _anim_lines(rig, mats, report)
+        if lines:
+            out[int(leaf)] = lines
+    return out
+
+
 def export_header(context, header, filepath, uv_name=None, preserve=True,
-                  report=None, patch_path=None, only=None):
+                  report=None, patch_path=None, only=None, animation="FILE"):
     """Write one OBJ8 file from a header Empty and its meshes.
 
     ``patch_path`` additionally writes the Ortho4XP patch variant: the ANCHOR
@@ -942,11 +1221,28 @@ def export_header(context, header, filepath, uv_name=None, preserve=True,
     (ANIM_*, ATTR_manip_*, LIGHT_*, ATTR_LOD, the VLINE/VLIGHT sections), so the
     animation blocks survive; a dropped part just contributes no batch and
     POINT_COUNTS is recomputed.  ``None`` writes every part.
+
+    ``animation`` decides where the ANIM_* blocks come from:
+
+        "FILE"     the command stream exactly as imported (default)
+        "BLENDER"  regenerated from each rig's Action, so keyframes edited in
+                   Blender reach the file.  The file's own animation commands
+                   are dropped, and every animated batch gets a fresh
+                   ANIM_begin block built from its rig.
     """
     template = _header_template(header)
     leaf_objs = _leaf_object_names(header)
     if not template.events:
         template.events = [(OC.EV_LEAF, i) for i in range(len(leaf_objs))]
+
+    leaf_blocks = None
+    if animation == "BLENDER":
+        template.events = XA.strip_animation(template.events)
+        leaf_blocks = build_anim_blocks(context, header, report)
+        preserve = False
+        if not leaf_blocks and report:
+            report({'WARNING'}, "%s: no animated parts in Blender, writing "
+                                 "the geometry without animation" % header.name)
 
     skip = set()
     if only is not None:
@@ -979,7 +1275,7 @@ def export_header(context, header, filepath, uv_name=None, preserve=True,
     vt_text, idx_values, spans, fps = build_tables(
         context, template, leaf_objs, uv_name, report=report, skip=skip)
     text = OC.emit(template, vt_text=vt_text, idx_values=idx_values,
-                   leaf_spans=spans)
+                   leaf_spans=spans, leaf_blocks=leaf_blocks)
     with open(filepath, "wb") as f:
         f.write(text.encode("latin-1", "replace"))
     if patch_path:
@@ -989,13 +1285,29 @@ def export_header(context, header, filepath, uv_name=None, preserve=True,
             "indices": len(idx_values)}
 
 
+def parts(header):
+    """Every geometry batch under a header Empty, in object order.
+
+    A batch that carries animation hangs off a rig Empty (`header -> rig ->
+    mesh`), so a plain `header.children` loop finds nothing for those files.
+    Always go through this.
+    """
+    out = []
+
+    def walk(node):
+        for child in node.children:
+            if is_batch(child):
+                out.append(child)
+            if is_batch(child) or is_rig(child):
+                walk(child)
+
+    walk(header)
+    return out
+
+
 def collect_scene_meshes(header, only_used=False):
     """Meshes under a header Empty, in object order."""
-    out = []
-    for child in header.children:
-        if child.type == 'MESH':
-            out.append(child)
-    return out
+    return [ob for ob in parts(header) if ob.type == 'MESH']
 
 
 def export_unparented_objects(context, filepath, objects, uv_name=None,

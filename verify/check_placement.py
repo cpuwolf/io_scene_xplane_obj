@@ -30,18 +30,23 @@ for ob in bpy.data.objects:
         for i in range(3):
             lo[i] = min(lo[i], w[i])
             hi[i] = max(hi[i], w[i])
-    rows.append((os.path.basename(ob.parent.get(XM.PROP_SOURCE, "?")), ob.name,
-                 ob.get(XM.PROP_PLACEMENT), (lo + hi) / 2, hi - lo,
-                 ob.get("xp8_dummy")))
+    header = ob.parent
+    while header is not None and not XM.is_header(header):
+        header = header.parent
+    rig = ob.parent if XM.is_rig(ob.parent) else None
+    placement = list(rig.location) if rig is not None else None
+    rows.append((os.path.basename(header.get(XM.PROP_SOURCE, "?")) if header
+                 else "?", ob.name, placement, (lo + hi) / 2, hi - lo,
+                 rig.get(XM.PROP_DATAREF) if rig is not None else None))
 
-placed = [r for r in rows if r[2]]
+placed = [r for r in rows if r[2] and any(abs(v) > 1e-9 for v in r[2])]
 print("meshes %d, placed parts %d" % (len(rows), len(placed)))
-print("%-26s %-24s %-26s %s" % ("part", "placement (Blender m)",
+print("%-26s %-24s %-26s %s" % ("part", "rig offset (Blender m)",
                                "world centre", "size"))
 for src, name, pl, ctr, sz, _ in sorted(placed,
                                         key=lambda r: -max(abs(r[3].x),
                                                            abs(r[3].y))):
-    p = json.loads(pl)
+    p = pl
     bad = "  <== outside the airframe" if (abs(ctr.x) > 8.5 or
                                            abs(ctr.y) > 12) else ""
     print("%-26s (%6.2f %6.2f %6.2f)  (%6.2f %6.2f %6.2f)  (%5.2f %5.2f %5.2f)%s"

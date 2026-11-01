@@ -103,11 +103,12 @@ def main():
 
     tris = {}
     for h in headers:
-        t_count = sum(len(c.data.polygons) for c in h.children
+        t_count = sum(len(c.data.polygons) for c in XM.parts(h)
                       if c.get(XM.PROP_ROLE) == XM.ROLE_TRIS)
         tris[os.path.splitext(os.path.basename(h.get(XM.PROP_SOURCE)))[0]] = t_count
         print("  %-26s parts %3d  polys %6d" % (
-            os.path.basename(h.get(XM.PROP_SOURCE)), len(h.children), t_count))
+            os.path.basename(h.get(XM.PROP_SOURCE)),
+            len(XM.parts(h)), t_count))
     check(all(v > 0 for v in tris.values()), "some file imported no triangles")
     check(len(bpy.data.images) > 0, "no textures loaded")
     print("images: %d  materials: %d" % (len(bpy.data.images),
@@ -217,10 +218,10 @@ def main():
     print("\nedit + export #2:")
     # the biggest object is the interesting one (flight model, door animations)
     victim_header = max(headers, key=lambda h: sum(
-        len(c.data.polygons) for c in h.children
+        len(c.data.polygons) for c in XM.parts(h)
         if c.get(XM.PROP_ROLE) == XM.ROLE_TRIS))
     victim = None
-    for child in victim_header.children:
+    for child in XM.parts(victim_header):
         if child.get(XM.PROP_ROLE) == XM.ROLE_TRIS and len(child.data.vertices):
             victim = child
             break
@@ -269,10 +270,11 @@ def main():
     h2 = [o for o in bpy.data.objects if XM.is_header(o)]
     check(len(h2) == 1, "re-import made %d headers" % len(h2))
     if h2:
-        polys = sum(len(c.data.polygons) for c in h2[0].children)
+        polys = sum(len(c.data.polygons) for c in XM.parts(h2[0])
+                    if c.get(XM.PROP_ROLE) in (XM.ROLE_TRIS, XM.ROLE_LINES))
         check(polys == tris[stem], "re-imported poly count %d != %d"
               % (polys, tris[stem]))
-        print("  OK: %d parts, %d polys" % (len(h2[0].children), polys))
+        print("  OK: %d parts, %d polys" % (len(XM.parts(h2[0])), polys))
 
     # ---- 5. scratch export ---------------------------------------------
     print("\nscratch export:")

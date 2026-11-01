@@ -507,7 +507,8 @@ def replace_counts(line, counts):
 
 
 def emit(obj, vt_text=None, idx_values=None, leaf_spans=None,
-         leaf_states=None, extra_globals=None, header_comment=None):
+         leaf_states=None, extra_globals=None, header_comment=None,
+         leaf_blocks=None):
     """Serialise an Obj8 back to text.
 
     The defaults reproduce the file this object was parsed from (same VT text,
@@ -518,6 +519,9 @@ def emit(obj, vt_text=None, idx_values=None, leaf_spans=None,
         idx_values   the whole new index table
         leaf_spans   {leaf_index: (offset, count)} into idx_values
         leaf_states  {leaf_index: state-list} replacing the parsed snapshot
+        leaf_blocks  {leaf_index: [animation command line, ...]} wrapped in a
+                     fresh ANIM_begin/ANIM_end around that batch (the export
+                     mode that writes the animation back from Blender)
     """
     nl = obj.line_ending
     out = []
@@ -612,8 +616,18 @@ def emit(obj, vt_text=None, idx_values=None, leaf_spans=None,
         for line in pending:
             out.append("\t" * depth + line)
         ckw, cnum = obj.cmd_sep
-        out.append("\t" * depth + leaf.kind + ckw + "%d" % span[0]
-                   + cnum + "%d" % span[1])
+        batch = (leaf.kind + ckw + "%d" % span[0] + cnum + "%d" % span[1])
+        block = None
+        if leaf_blocks:
+            block = leaf_blocks.get(payload)
+        if block:
+            out.append("\t" * depth + "ANIM_begin")
+            for line in block:
+                out.append("\t" * (depth + 1) + line)
+            out.append("\t" * (depth + 1) + batch)
+            out.append("\t" * depth + "ANIM_end")
+        else:
+            out.append("\t" * depth + batch)
 
     while depth > 0:
         depth -= 1

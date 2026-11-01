@@ -34,6 +34,47 @@ Triangle winding is flipped on both sides: X-Plane calls a *clockwise* triangle
 the front face, Blender a counter-clockwise one. Forgetting this makes every
 model render inside-out — no error, just invisible surfaces.
 
+## Animation
+
+A `.obj` animation is driven by a **dataref** — a value the sim owns at run time
+(`sim/flightmodel2/gear/deploy_ratio[0]`), not by a clock. Blender has no such
+input, so the time line *is* the dataref:
+
+* every batch inside an `ANIM_begin`/`ANIM_end` block gets a **rig Empty**
+  (`header -> rig -> mesh`) holding the transform its datarefs select. The part
+  therefore sits where the sim would draw it — gear legs down, doors open —
+  instead of piled up at the file origin, and you can edit it there;
+* the rig also gets an **Action**: frame **1 = every dataref at its lowest keyed
+  value, frame 101 = at its highest**, linear keys (which is how the file
+  interpolates). Drag the time line to watch the gear retract;
+* `ANIM_show`/`ANIM_hide` cannot be keyframed, so a batch hidden at the import
+  pose is simply hidden in the viewport; the visibility commands themselves are
+  kept and travel back with the rig.
+
+**Import** options: *Animation at* (0..1, where to look — the pose you edit in),
+*Pin datarefs* (`dref=value, …` to hold one still while the rest sweeps, e.g. a
+prop at 0°, and *Bake Actions* off for rigs with a static pose only).
+
+**Export** has two animation modes:
+
+| mode | what happens |
+| --- | --- |
+| **From the file** (default) | the `ANIM_*` command stream is written exactly as imported. Edit it as text in `xp8_events` |
+| **From Blender (rigs)** | every animated batch's block is **regenerated from its rig's Action**: the keyframes become `ANIM_rotate_begin`/`ANIM_rotate_key` tables (and `ANIM_trans_*`), and the file's own animation commands are dropped |
+
+Rigs never reach the file — the exporter walks the parent chain, skips them, and
+uses what you set on the mesh itself — so an untouched import is still byte
+identical, and a part you *move* in Blender exports at the new position.
+
+To *author* a new animation, select a batch and press **Animate Part** in the
+N-panel (category *X-Plane*): it creates the rig, and you set the dataref and
+its value range there. Keyframe the rig's location/rotation, export with
+**From Blender (rigs)**.
+
+Rotations are written as up to three axis blocks (Z, Y, X, multiplied in that
+order) because OBJ8 stores axis/angle, not matrices; a single hinge — the common
+case — compresses back to a two-key table.
+
 ## Export writes the selection
 
 **File > Export > X-Plane OBJ8** writes what is selected, nothing else:
@@ -91,10 +132,11 @@ aircraft's geometry exported this way would put the whole aircraft into the terr
 
 ## Where the X-Plane data lives
 
-One `.obj` becomes one Empty plus one mesh per geometry command. Blender has no
-concept of a dataref, so the file's animation is **not** turned into actions or
-drivers — it stays text in custom properties on the Empty and is re-emitted on
-export. Nothing you do to the meshes can damage it.
+One `.obj` becomes one Empty plus one mesh per geometry command. The animation
+exists twice on purpose: as **text** in custom properties on the Empty (the
+ground truth that is written back), and as an **Action on a rig Empty** per
+animated batch (so you can see and edit it). Nothing you do to the meshes can
+damage the text.
 
 | property | on | contents |
 | --- | --- | --- |
@@ -104,7 +146,9 @@ export. Nothing you do to the meshes can damage it.
 | `xp8_leaf_states` | Empty | the `ATTR_*` snapshot each batch draws under |
 | `xp8_leaf_objs` | Empty | batch index → object name |
 | `xp8_fingerprints`, `xp8_cmd_hash` | Empty | what the "was anything changed?" test compares |
-| `xp8_leaf`, `xp8_placement` | mesh | which batch it is, and the static `ANIM_trans` applied to place it |
+| `xp8_leaf` | mesh | which batch it is |
+| `xp8_leaf`, `xp8_dataref`, `xp8_anim_range`, `xp8_anim_datarefs`, `xp8_anim_vis`, `xp8_anim_action` | rig Empty | the batch it drives, its driving dataref and value range, the visibility commands, the baked Action |
+| `xp8_placement` | mesh | legacy: a static `ANIM_trans` offset, still honoured on export |
 | `xp8_vt` | mesh attribute | source `VT` row index per vertex, so untouched rows keep their exact text |
 
 Editing `xp8_events`, `xp8_globals` or `xp8_leaf_states` and exporting does reach
@@ -115,10 +159,12 @@ or any geometry, differs from what was imported.
 
 * `LINES` are imported read-only and exported from their stored indices; light
   primitives (`LIGHT_PARAM`, `LIGHT_NAMED`) are preserved as raw commands.
-* There is no manipulator/animation *authoring* UI — existing commands survive
-  an export, new ones cannot be created here. Use
-  [XPlane2Blender](https://github.com/X-Plane/XPlane2Blender) to build those from
-  scratch.
+* Animation can be *re-keyed* here (rigs + Actions → `ANIM_rotate_key` tables),
+  but only as a rigid transform per batch: rotation is written as Euler XYZ
+  around the origin, and `ANIM_show`/`ANIM_hide` are carried through as-is
+  rather than authored. Manipulators (`ATTR_manip_*`) survive an export but
+  cannot be created or edited here — use
+  [XPlane2Blender](https://github.com/X-Plane/XPlane2Blender) for that.
 * One `.obj` has one texture set, so an object with several materials exports
   with the first material's textures.
 * Blender stores custom normals as int16 per axis, so regenerated normals can
@@ -132,7 +178,9 @@ or any geometry, differs from what was imported.
 
 python3 verify/test_codec.py verify/fixtures       # codec only, no Blender
 python3 verify/test_fixture.py                     # pinned expectations
+python3 verify/test_anim.py                        # ANIM_* evaluator, no Blender
 blender -b --factory-startup --python verify/roundtrip_blender.py -- verify/fixtures
+blender -b --factory-startup --python verify/anim_roundtrip.py -- verify/fixtures
 blender -b --factory-startup --python verify/check_selection.py   # export = selection
 
 # stronger: run the same tests against a real aircraft
@@ -167,7 +215,9 @@ Tests are not part of the release build — run them yourself:
 ```sh
 python3 verify/test_codec.py verify/fixtures
 python3 verify/test_fixture.py
+python3 verify/test_anim.py
 blender -b --factory-startup --python verify/roundtrip_blender.py -- verify/fixtures
+blender -b --factory-startup --python verify/anim_roundtrip.py -- verify/fixtures
 ```
 
 

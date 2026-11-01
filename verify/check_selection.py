@@ -231,7 +231,7 @@ with open(lines_src, "w") as f:
             "IDX10\t0 1 2 0 2 3 0 1\nTRIS\t0 6\nLINES\t6 2\n")
 l_src = OC.parse(lines_src)
 header, _ = fresh_import(lines_src)
-kids = list(header.children)
+kids = [c for c in header.children if not XM.is_rig(c)]
 lines_part = [c for c in kids if c.get(XM.PROP_ROLE) == XM.ROLE_LINES][0]
 tris_part = [c for c in kids if c.get(XM.PROP_ROLE) == XM.ROLE_TRIS][0]
 select([lines_part])

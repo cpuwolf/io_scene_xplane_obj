@@ -30,6 +30,16 @@ into a normal Blender scene, and puts it back together on export:
     silently delete the aircraft's animations;
   * a file you did not touch is written back byte for byte.
 
+Animation
+---------
+A dataref is a value the sim owns at run time, so "the animation" cannot be
+copied into Blender; it can be *sampled* and *re-keyed*.  Every batch inside an
+ANIM block gets a rig Empty holding the transform its datarefs select at the
+import pose, plus an Action whose time line is the dataref (frame 1..101 = the
+keyed value range), so the parts move on the time line like they do in the sim.
+Export can either write the command stream back untouched, or regenerate every
+ANIM_* block from those Actions (`ANIM_rotate_key` / `ANIM_trans_key` tables).
+
 Coordinate system
 -----------------
 X-Plane is right-handed with +Y up, +Z south; Blender is right-handed with +Z
@@ -40,21 +50,24 @@ is counter-clockwise.
 What is NOT supported
 ---------------------
 Lines (VLINE + LINES) are imported read-only and written back from their stored
-indices; light primitives are preserved as raw commands.  There is no
-manipulator authoring UI: manipulator commands survive an export, you just
-cannot create new ones here.  Use XPlane2Blender when you need to author
-animations/manipulators from scratch; use this when you need to get an existing
-object into Blender, change it, and get a valid object back out.
+indices; light primitives are preserved as raw commands.  Re-keying an animation
+is limited to a rigid transform per batch (Euler XYZ about the origin), and
+ANIM_show/hide are carried through rather than authored.  Manipulators survive
+an export but cannot be created here.  Use XPlane2Blender when you need to
+author manipulators, or animations that are more than a hinge.
 """
 
 import os
 import glob
+import json
 
 import bpy
-from bpy.props import BoolProperty, EnumProperty, StringProperty
+from bpy.props import (BoolProperty, EnumProperty, FloatProperty,
+                       StringProperty)
 from bpy_extras.io_utils import ExportHelper, ImportHelper
 
 from . import objcodec as OC
+from . import xpanim as XA
 from . import xpmesh as XM
 
 CLASSES = []
@@ -85,11 +98,32 @@ class IMPORT_OT_xplane_obj(bpy.types.Operator, ImportHelper):
         default=False)
 
     place_parts: BoolProperty(
-        name="Place animated parts",
-        description="Parts modelled at the file origin and moved into place by "
-                    "a static ANIM_trans (landing gear legs, wipers) are moved "
-                    "to their real position so they can be edited there. "
-                    "Export subtracts it again, so the file stays unchanged",
+        name="Animate and place parts",
+        description="Batches inside an ANIM_begin/ANIM_end block are moved to "
+                    "the attitude their datarefs select, and get a rig Empty "
+                    "so the animation can be scrubbed. Export ignores the rig, "
+                    "so the file is unchanged unless you export from Blender",
+        default=True)
+
+    anim_position: FloatProperty(
+        name="Animation at",
+        description="Where to look in the animation: 0 is every dataref at its "
+                    "lowest keyed value, 1 at its highest. This sets the pose "
+                    "of the parts and the time-line position when the Actions "
+                    "are baked",
+        default=0.0, min=0.0, max=1.0, subtype='FACTOR')
+
+    anim_overrides: StringProperty(
+        name="Pin datarefs",
+        description="Keep a dataref fixed while the rest of the animation "
+                    "sweeps, e.g. "
+                    "sim/flightmodel2/engines/prop_rotation_angle_deg[0]=0",
+        default="")
+
+    bake_actions: BoolProperty(
+        name="Bake Actions",
+        description="Write the animation into an Action per part, so dragging "
+                    "the time line (frame 1..101 = dataref min..max) plays it",
         default=True)
 
     def execute(self, context):
@@ -119,17 +153,20 @@ class IMPORT_OT_xplane_obj(bpy.types.Operator, ImportHelper):
             try:
                 header = XM.import_file(context, p, into_collection=coll,
                                         report=self.report,
-                                        place_parts=self.place_parts)
+                                        place_parts=self.place_parts,
+                                        anim_position=self.anim_position,
+                                        anim_overrides=self.anim_overrides,
+                                        bake_actions=self.bake_actions)
             except (ValueError, OSError) as exc:
                 self.report({'ERROR'}, "%s: %s" % (os.path.basename(p), exc))
                 continue
             if header is None:
                 continue
             made += 1
-            for child in header.children:
-                if child.type == 'MESH' and child.get(XM.PROP_ROLE) == XM.ROLE_TRIS:
-                    tri_count += len(child.data.loop_triangles) or (
-                        len(child.data.polygons))
+            for part in XM.parts(header):
+                if part.type == 'MESH' and part.get(XM.PROP_ROLE) == XM.ROLE_TRIS:
+                    tri_count += len(part.data.loop_triangles) or (
+                        len(part.data.polygons))
             if coll is not None:
                 header.hide_viewport = True
 
@@ -177,6 +214,20 @@ class EXPORT_OT_xplane_obj(bpy.types.Operator, ExportHelper):
     uv_layer: StringProperty(
         name="UV map", default="",
         description="UV layer to export (empty = active layer)")
+
+    animation: EnumProperty(
+        name="Animation",
+        items=[
+            ('FILE', "From the file",
+             "Write the ANIM_* command stream exactly as it was imported. "
+             "Editing the animation means editing the xp8_events property"),
+            ('BLENDER', "From Blender (rigs)",
+             "Regenerate every animated part's ANIM_* block from its rig: the "
+             "Action keyframes become ANIM_rotate_key / ANIM_trans_key tables, "
+             "and the file's own animation commands are dropped. Use this "
+             "after you have changed an animation in Blender"),
+        ],
+        default='FILE')
 
     patch_obj: BoolProperty(
         name="Write .patch.obj",
@@ -266,6 +317,7 @@ class EXPORT_OT_xplane_obj(bpy.types.Operator, ExportHelper):
                     preserve=self.preserve_unmodified,
                     report=self.report,
                     patch_path=self._patch_path(dst),
+                    animation=self.animation,
                     only=None if parts is None else [ob.name for ob in parts])
             except (OSError, ValueError) as exc:
                 self.report({'ERROR'}, "%s: %s" % (os.path.basename(dst), exc))
@@ -310,6 +362,7 @@ class EXPORT_OT_xplane_obj(bpy.types.Operator, ExportHelper):
                     preserve=self.preserve_unmodified,
                     report=self.report,
                     patch_path=self._patch_path(self.filepath),
+                    animation=self.animation,
                     only=None if parts is None else [ob.name for ob in parts])
             except (OSError, ValueError) as exc:
                 self.report({'ERROR'}, str(exc))
@@ -355,6 +408,57 @@ def _find_header(obj):
 
 
 # ---------------------------------------------------------------------------
+# authoring: give a part its own animation rig
+# ---------------------------------------------------------------------------
+
+@_add
+class OBJECT_OT_xp8_anim_rig(bpy.types.Operator):
+    """Give the selected part an animation rig, so it can be keyframed here"""
+    bl_idname = "object.xp8_anim_rig"
+    bl_label = "Animate Part"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    dataref: StringProperty(
+        name="Dataref",
+        description="The sim variable that drives this part; it becomes the "
+                    "x axis of the exported ANIM_rotate_key / ANIM_trans_key "
+                    "table (frame 1..101 = the value range below)",
+        default="sim/flightmodel2/misc/door_open_ratio")
+
+    v1: FloatProperty(name="Value at frame 1", default=0.0)
+    v2: FloatProperty(name="Value at frame 101", default=1.0)
+
+    @classmethod
+    def poll(cls, context):
+        ob = context.active_object
+        return ob is not None and XM.is_batch(ob)
+
+    def execute(self, context):
+        ob = context.active_object
+        header = _find_header(ob)
+        rig = ob.parent if XM.is_rig(ob.parent) else None
+        if rig is None:
+            rig = bpy.data.objects.new(ob.name + "_anim", None)
+            rig.empty_display_type = 'PLAIN_AXES'
+            rig.empty_display_size = 0.15
+            rig[XM.PROP_ROLE] = XM.ROLE_RIG
+            rig.rotation_mode = 'QUATERNION'
+            (context.collection or context.scene.collection).objects.link(rig)
+            rig.parent = header
+            rig.matrix_parent_inverse.identity()
+            ob.parent = rig
+            ob.matrix_parent_inverse.identity()
+        rig[XM.PROP_LEAF] = ob.get(XM.PROP_LEAF, -1)
+        rig[XM.PROP_DATAREF] = self.dataref
+        rig[XM.PROP_ANIM_RANGE] = json.dumps([self.v1, self.v2])
+        if not rig.get(XM.PROP_ANIM_VIS):
+            rig[XM.PROP_ANIM_VIS] = "[]"
+        self.report({'INFO'}, "%s: rig %s driven by %s (%g..%g)"
+                    % (ob.name, rig.name, self.dataref, self.v1, self.v2))
+        return {'FINISHED'}
+
+
+# ---------------------------------------------------------------------------
 # side panel: what am I looking at
 # ---------------------------------------------------------------------------
 
@@ -377,7 +481,7 @@ class VIEW3D_PT_xplane_obj(bpy.types.Panel):
         box.label(text=os.path.basename(header.get(XM.PROP_SOURCE, "?")) or
                   header.name, icon='FILE')
         col = box.column(align=True)
-        col.label(text="parts: %d" % len(header.children))
+        col.label(text="parts: %d" % len(XM.parts(header)))
         globals_lines = _json_list(header.get(XM.PROP_GLOBALS, "[]"))
         for line in globals_lines:
             words = line.split()
@@ -386,6 +490,18 @@ class VIEW3D_PT_xplane_obj(bpy.types.Panel):
                                       "BLEND_GLASS", "NORMAL_METALNESS"):
                 col.label(text=line[:48], icon='TEXTURE'
                           if words[0].startswith("TEXTURE") else 'DOT')
+
+        if XM.is_rig(obj):
+            abox = layout.box()
+            abox.label(text="animation rig", icon='ARMATURE_DATA')
+            col = abox.column(align=True)
+            col.label(text="dataref: %s" % (obj.get(XM.PROP_DATAREF)
+                                            or "(none)"))
+            col.label(text="range: %s" % obj.get(XM.PROP_ANIM_RANGE,
+                                                 "[0, 1]"))
+            if obj.get(XM.PROP_ANIM_ACTION):
+                col.label(text="action: %s" % obj[XM.PROP_ANIM_ACTION])
+            col.label(text="frames 1..101 = dataref min..max")
 
         if XM.is_batch(obj):
             part = layout.box()
@@ -396,6 +512,10 @@ class VIEW3D_PT_xplane_obj(bpy.types.Panel):
             info.label(text="vertices: %d" % len(obj.data.vertices))
             if obj.data.materials:
                 info.label(text="material: %s" % obj.data.materials[0].name)
+            if XM.is_rig(obj.parent):
+                info.label(text="rig: %s" % obj.parent.name, icon='ARMATURE_DATA')
+            else:
+                info.operator("object.xp8_anim_rig", icon='ADD')
 
         warnings = _json_list(header.get("xp8_warnings", "[]"))
         if warnings:
