@@ -20,6 +20,7 @@ The last point is why the comparison is done on matrices rather than on the
 ANIM_* lines: the exporter is free to write a two-endpoint command as a key
 table (it always does), so the text differs by design while the motion must not.
 """
+import json
 import os
 import sys
 import tempfile
@@ -58,7 +59,52 @@ def sha(path):
 def poses(anim, position):
     """The pose dict the importer bakes at: every dataref at its own fraction."""
     return {d: lo + (hi - lo) * position
-            for d, (lo, hi) in anim.ranges().items()}
+            for d, (lo, hi) in anim.pose_ranges().items()}
+
+
+def key_counts(anim, leaf):
+    """How many key lines each key table of a batch has."""
+    return [len(cmd["keys"]) for block in anim.leaves.get(leaf, [])
+            for cmd in block.commands if "keys" in cmd]
+
+
+def compare_keys(name, header, src_anim, dst_anim):
+    """Every key table written must have exactly the keys the rig has.
+
+    That is the whole point of the time line being the dataref: three keyframes
+    in Blender must come out as three ANIM_rotate_key lines, and a two-endpoint
+    animation imported as two keyframes has to stay two.
+    """
+    written = set(json.loads(header.get("xp8_anim_written", "[]") or "[]"))
+    batches = kept = 0
+    total_src = total_rig = total_dst = 0
+    for rig in [c for c in header.children if XM.is_rig(c)]:
+        leaf = rig.get(XM.PROP_LEAF)
+        if leaf is None or leaf not in src_anim.leaves:
+            continue
+        want = [len(cmd["keys"]) for block in src_anim.leaves[leaf]
+                for cmd in block.commands if "keys" in cmd]
+        if not want and not any(cmd["kind"] in (XA.CMD_ROTATE, XA.CMD_TRANS)
+                                for block in src_anim.leaves[leaf]
+                                for cmd in block.commands):
+            continue                      # visibility only: nothing to key
+        batches += 1
+        keys = json.loads(rig.get(XM.PROP_ANIM_KEYS, "[]") or "[]")
+        got = key_counts(dst_anim, leaf)
+        total_src += max(want) if want else 2
+        if leaf not in written:
+            kept += 1                     # not a hinge: file animation kept
+            continue
+        total_rig += len(keys)
+        if not got:
+            kept += 1
+            continue
+        total_dst += max(got)
+        check(max(got) == len(keys),
+              "%s: batch %d: %d keyframes on the rig, %d keys written back"
+              % (name, leaf, len(keys), max(got)))
+    print("  %-24s %d batches, %d kept from the file; keys: file %d, rig %d, "
+          "written %d" % (name, batches, kept, total_src, total_rig, total_dst))
 
 
 def compare_motion(name, src_anim, dst_anim):
@@ -149,17 +195,26 @@ def main():
               "%s: index count changed %d -> %d" % (stem, len(a.idx),
                                                     len(b.idx)))
         compare_motion(stem, anim_a, anim_b)
+        compare_keys(stem, h, anim_a, anim_b)
         # Rotation must always come back as a key table, and a translate that
         # still has two different endpoints would be an animation the file kept
         # instead of regenerating.  A constant ANIM_trans is the placement form
         # the exporter writes on purpose, so that one is fine.
+        written = set(json.loads(h.get("xp8_anim_written", "[]") or "[]"))
+        animated = [leaf for leaf in anim_a.leaves
+                    if any(block.commands for block in anim_a.leaves[leaf])]
+        strict = bool(animated) and len(written) == len(animated)
         stray = []
-        for kind, line in b.events:
+        for kind, line in (b.events if strict else []):
             if kind != OC.EV_RAW or not line:
                 continue
             words = line.split()
-            if words[0] == "ANIM_rotate":
-                stray.append(line)
+            if words[0] == "ANIM_rotate" and len(words) >= 6:
+                # a static turn (equal angles) is the rest orientation, either
+                # generated or kept from the file; two different angles would be
+                # an animation the exporter failed to rewrite as a key table
+                if words[4] != words[5]:
+                    stray.append(line)
             elif words[0] == "ANIM_trans" and len(words) >= 7:
                 if words[1:4] != words[4:7]:
                     stray.append(line)

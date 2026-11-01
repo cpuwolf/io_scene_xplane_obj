@@ -46,7 +46,12 @@ input, so the time line *is* the dataref:
   instead of piled up at the file origin, and you can edit it there;
 * the rig also gets an **Action**: frame **1 = every dataref at its lowest keyed
   value, frame 101 = at its highest**, linear keys (which is how the file
-  interpolates). Drag the time line to watch the gear retract;
+  interpolates). Drag the time line to watch the gear retract. The keyframes are
+  the file's own keys — a two-endpoint `ANIM_rotate` becomes two keyframes, a
+  three-key `ANIM_rotate_key` table becomes three — so the time line is as coarse
+  or as fine as the animation really is. Keys are only added where the motion
+  between them is not a straight line (two datarefs composing, a rotation about
+  two axes): there the extra keys are what makes the preview honest;
 * `ANIM_show`/`ANIM_hide` cannot be keyframed, so a batch hidden at the import
   pose is simply hidden in the viewport; the visibility commands themselves are
   kept and travel back with the rig.
@@ -71,9 +76,14 @@ N-panel (category *X-Plane*): it creates the rig, and you set the dataref and
 its value range there. Keyframe the rig's location/rotation, export with
 **From Blender (rigs)**.
 
-Rotations are written as up to three axis blocks (Z, Y, X, multiplied in that
-order) because OBJ8 stores axis/angle, not matrices; a single hinge — the common
-case — compresses back to a two-key table.
+A rotation is written as one `ANIM_rotate_begin` axis/angle table — exactly the
+shape a hinge has — preceded by an `ANIM_rotate` for the rest orientation when
+the part is not built axis-aligned. **A batch is only re-keyed when it really is
+one hinge driven by one dataref**; OBJ8's key table has a single x axis, so
+anything else (a gear leg that folds *and* steers, a wiper arm and blade on two
+datarefs) would silently lose one of its inputs. Those batches keep the
+animation they came in with, and the export says so, part by part, in the
+console — an edit made to them in Blender is not written.
 
 ## Export writes the selection
 

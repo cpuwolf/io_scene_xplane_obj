@@ -278,7 +278,7 @@ def check_file(path):
     # 3. sweeping the datarefs must change *something*: a transform, or the
     #    visible set (a pure ANIM_show/animation is legal -- that is how icing
     #    and prop discs are done)
-    ranges = anim.ranges()
+    ranges = anim.pose_ranges()
     if ranges:
         moved = 0
         seen = set()

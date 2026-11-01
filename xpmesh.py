@@ -67,6 +67,7 @@ PROP_ANIM_RANGE = "xp8_anim_range"
 PROP_ANIM_DATAREFS = "xp8_anim_datarefs"
 PROP_ANIM_VIS = "xp8_anim_vis"
 PROP_ANIM_ACTION = "xp8_anim_action"
+PROP_ANIM_KEYS = "xp8_anim_keys"
 
 ROLE_HEADER = "header"
 ROLE_TRIS = "tris"
@@ -399,7 +400,7 @@ def pose_at(anim, position, overrides=None):
     what "extended" looks like for most aircraft parts.
     """
     pose = {}
-    for dref, (lo, hi) in anim.ranges().items():
+    for dref, (lo, hi) in anim.pose_ranges().items():
         pose[dref] = lo + (hi - lo) * position
     if overrides:
         pose.update(overrides)
@@ -420,8 +421,10 @@ def _rig_for(context, coll, header, name, m_bl):
     return rig
 
 
-#: samples along the time line: frame 1 .. frame SAMPLES is dataref min .. max
-SAMPLES = 101
+#: the time line spans frame 1 .. frame SPAN+1, and that span *is* every
+#: dataref going from its lowest keyed value to its highest
+SPAN = 100
+SAMPLES = SPAN + 1
 
 
 def _fcurve(action, ob, data_path, index):
@@ -447,19 +450,39 @@ def _write_curve(action, ob, data_path, index, frames, values):
     fc.update()
 
 
+def frame_of(t):
+    """Time-line position (0..1) -> frame."""
+    return 1.0 + t * SPAN
+
+
+def value_of(frame):
+    """Frame -> time-line position (0..1)."""
+    return (frame - 1.0) / SPAN
+
+
 def bake_rig_action(rig, anim, leaf, overrides=None):
     """Bake one batch's animation into an Action on its rig.
 
     Blender cannot read a dataref, so the time line *is* the dataref: frame 1
-    is every dataref at its lowest keyed value, frame SAMPLES at its highest.
-    Dragging the time line therefore plays the animation the way the sim would.
+    is every dataref at its lowest keyed value, frame 101 at its highest.
+
+    The **keys are the file's keys**.  An `ANIM_rotate` with two endpoints gives
+    two keys, a three-key `ANIM_rotate_key` table gives three, and a chain whose
+    datarefs have different key positions gives their union.  Sampling the whole
+    range at a fixed grid instead would put keys where the file has none and
+    lose the bend of a non-uniform table -- and the round trip would no longer be
+    exact.
     """
     rng = anim.ranges()
-    frames = list(range(1, SAMPLES + 1))
+    ts = XA.refine_keys(anim, leaf)
+    if ts is None:
+        # not a hinge: the file's animation stays in the file (see
+        # _swap_animation), but the preview still has to look right
+        ts = [i / 16.0 for i in range(17)]
+    frames = [frame_of(t) for t in ts]
     locs, quats = [], []
     prev = None
-    for i, frame in enumerate(frames):
-        t = i / (SAMPLES - 1.0)
+    for t, frame in zip(ts, frames):
         pose = {d: lo + (hi - lo) * t for d, (lo, hi) in rng.items()}
         if overrides:
             pose.update(overrides)
@@ -482,13 +505,19 @@ def bake_rig_action(rig, anim, leaf, overrides=None):
         _write_curve(action, rig, "rotation_quaternion", axis, frames,
                      [q[axis] for q in quats])
     rig[PROP_ANIM_ACTION] = action.name
+    rig[PROP_ANIM_KEYS] = json.dumps([round(t, 6) for t in ts])
     return action
 
 
 def _chain_datarefs(chain):
+    """Datarefs that move the batch.  Visibility-only ones are not included:
+    the time line is defined by the transforms (see PropertyAnimRange)."""
     out = []
     for block in chain:
         for cmd in block.commands:
+            if cmd["kind"] not in (XA.CMD_ROTATE, XA.CMD_ROTATE_KEYS,
+                                   XA.CMD_TRANS, XA.CMD_TRANS_KEYS):
+                continue
             dref = cmd.get("dataref")
             if dref and dref not in out:
                 out.append(dref)
@@ -597,7 +626,7 @@ def import_file(context, path, into_collection=None, report=None,
         for rig, leaf_index in rigs:
             bake_rig_action(rig, anim, leaf_index, overrides)
         # the animated properties are now owned by the Actions
-        context.scene.frame_set(int(1 + round(anim_position * (SAMPLES - 1))))
+        context.scene.frame_set(int(round(frame_of(anim_position))))
 
     header[PROP_GLOBALS] = json.dumps(obj8.globals)
     header[PROP_EVENTS] = json.dumps([[k, p] for k, p in obj8.events])
@@ -1109,18 +1138,65 @@ def _write_patch(path, vt_text, idx_values, anchor, report=None):
 
 #: one sample per time-line frame, so a baked Action is read back at the very
 #: frames it was written on
-def _sample_rigs(context, rigs):
-    """{rig name: [matrix_basis per frame]} with the Actions evaluated."""
+def _action_fcurves(action):
+    """The F-Curves of an Action on the 4.2 API or the 5.x layered one."""
+    legacy = getattr(action, "fcurves", None)
+    if legacy is not None:
+        return list(legacy)
+    out = []
+    for layer in action.layers:
+        for strip in layer.strips:
+            for bag in getattr(strip, "channelbags", []):
+                out.extend(bag.fcurves)
+    return out
+
+
+def _key_frames(rig):
+    """(sorted key frames, all-linear?) of a rig's Action, or None."""
+    ad = rig.animation_data
+    if ad is None or ad.action is None:
+        return None
+    frames = set()
+    linear = True
+    for fc in _action_fcurves(ad.action):
+        for kp in fc.keyframe_points:
+            frames.add(round(kp.co[0], 4))
+            if kp.interpolation != 'LINEAR':
+                linear = False
+    if not frames:
+        return None
+    return sorted(frames), linear
+
+
+def _sample_rigs(context, rigs, report=None):
+    """Read each rig back at the frames its own Action keys.
+
+    Keys are read where the Action puts them: a two-endpoint animation was baked
+    as two keyframes and comes back as two keys, a three-key table as three.
+    """
     scene = context.scene
-    frames = list(range(1, SAMPLES + 1))
-    out = dict((rig.name, []) for rig in rigs)
-    for frame in frames:
-        scene.frame_set(frame)
+    plans = {}
+    every = set([1.0])
+    for rig in rigs:
+        got = _key_frames(rig)
+        if got is None:
+            plans[rig.name] = [1.0]           # static rig: one sample is enough
+            continue
+        frames, _linear = got
+        plans[rig.name] = frames if len(frames) >= 2 else [1.0]
+        every.update(plans[rig.name])
+
+    mats = dict((rig.name, {}) for rig in rigs)
+    for frame in sorted(every):
+        whole = int(frame)
+        scene.frame_set(whole, subframe=frame - whole)
         depsgraph = context.evaluated_depsgraph_get()
         for rig in rigs:
-            ev = rig.evaluated_get(depsgraph)
-            out[rig.name].append(ev.matrix_basis.copy())
-    return out
+            if frame not in plans[rig.name]:
+                continue
+            mats[rig.name][frame] = (rig.evaluated_get(depsgraph)
+                                     .matrix_basis.copy())
+    return plans, mats
 
 
 def _unwrap(values):
@@ -1136,7 +1212,59 @@ def _unwrap(values):
     return out
 
 
-def _anim_lines(rig, mats, report=None):
+def _single_axis(quats):
+    """(axis, angles in degrees) when every rotation is about one axis.
+
+    A hinge, a prop, a gear leg -- almost every OBJ8 animation is one axis, and
+    one `ANIM_rotate_begin` block reproduces it *exactly* between keys.  Three
+    Euler tables would only agree at the keys: the interpolated path in between
+    is a different rotation (measured: 0.55 of matrix error on a 102 degree
+    gear swing), so the Euler form is a last resort, not the default.
+
+    Returns None when the samples do not share an axis.
+    """
+    ref = max(quats, key=lambda q: abs(q.angle))
+    if abs(ref.angle) < 1e-9:
+        return None
+    axis = ref.axis.copy()
+    if axis.length < 1e-9:
+        return None
+    axis.normalize()
+    angles = []
+    for q in quats:
+        qq = q.copy()
+        if qq.w < 0.0:
+            qq.negate()
+        s = qq.x * axis.x + qq.y * axis.y + qq.z * axis.z
+        theta = 2.0 * math.atan2(s, qq.w)          # radians, (-pi, pi]
+        test = Matrix.Rotation(theta, 3, axis)
+        got = qq.to_matrix()
+        if max(abs(test[i][j] - got[i][j])
+               for i in range(3) for j in range(3)) > 1e-4:
+            return None
+        angles.append(math.degrees(theta))
+    return axis, _unwrap(angles)
+
+
+def _sample_one(context, rig, frames):
+    """Evaluate one rig's matrix_basis at the given frames."""
+    scene = context.scene
+    out = []
+    for frame in frames:
+        whole = int(frame)
+        scene.frame_set(whole, subframe=frame - whole)
+        out.append(rig.evaluated_get(context.evaluated_depsgraph_get())
+                   .matrix_basis.copy())
+    return out
+
+
+def _xp_matrices(mats):
+    return [Matrix([list(row) for row in
+                    XA.to_xp([[m[i][j] for j in range(4)] for i in range(4)])])
+            for m in mats]
+
+
+def _anim_lines(rig, frames, mats, report=None):
     """ANIM_* lines for one batch, from the sampled rig transforms.
 
     The file has no matrix animation: a rotation is a sequence of axis/angle
@@ -1156,7 +1284,7 @@ def _anim_lines(rig, mats, report=None):
     except (ValueError, TypeError):
         v1, v2 = 0.0, 1.0
     n = len(mats)
-    vs = [v1 + (v2 - v1) * (i / (n - 1.0)) for i in range(n)]
+    vs = [v1 + (v2 - v1) * value_of(frame) for frame in frames]
 
     lines = []
     for entry in json.loads(rig.get(PROP_ANIM_VIS, "[]") or "[]"):
@@ -1167,26 +1295,85 @@ def _anim_lines(rig, mats, report=None):
     trans = [m.translation.copy() for m in mats]
     spread = max(max(abs(t[i] - trans[0][i]) for t in trans) for i in range(3))
     if spread > 1e-6:
-        keys = XA.simplify([(vs[i], tuple(trans[i])) for i in range(n)], 1e-4)
+        keys = [(vs[i], tuple(trans[i])) for i in range(n)]
         lines.extend(XA.trans_block(keys, dataref))
     elif max(abs(v) for v in trans[0]) > 1e-6:
         lines.append(XA.static_trans(tuple(trans[0])))
 
-    angles = {"X": [], "Y": [], "Z": []}
-    for m in mats:
-        euler = m.to_euler('XYZ')
-        for axis, value in zip("XYZ", euler):
-            angles[axis].append(math.degrees(value))
-    # outermost first: Rz @ Ry @ Rx
-    for axis in ("Z", "Y", "X"):
-        values = _unwrap(angles[axis])
-        if max(abs(v) for v in values) < 1e-6:
-            continue
-        keys = XA.simplify([(vs[i], values[i]) for i in range(n)], 0.005)
-        unit = {"X": (1.0, 0.0, 0.0), "Y": (0.0, 1.0, 0.0),
-                "Z": (0.0, 0.0, 1.0)}[axis]
-        lines.extend(XA.rotate_block(unit, keys, dataref))
-    return lines or None
+    quats = [m.to_quaternion() for m in mats]
+    # Split the motion into "the rest orientation" and "what the dataref does to
+    # it".  The rest orientation is usually a static ANIM_rotate in the file
+    # (a part built axis-aligned and then turned into place); the animated part
+    # is then a plain hinge.  Requiring the *absolute* rotations to share an axis
+    # would reject exactly that pattern -- a 102 degree gear swing on top of a
+    # 90 degree static turn is not one axis, while the swing itself is.
+    rest = quats[0].copy()
+    rel = [rest.inverted() @ q for q in quats]
+    if max(abs(q.angle) for q in rel) < 1e-9:
+        # translation only (icing boots, sliding doors): nothing to rotate
+        return lines or None
+    single = _single_axis(rel)
+    if single is not None:
+        if abs(rest.angle) > 1e-6:
+            lines.append(XA.static_rotate(rest.axis, math.degrees(rest.angle)))
+        axis, degrees = single
+        if max(abs(v) for v in degrees) > 1e-6:
+            keys = [(vs[i], degrees[i]) for i in range(n)]
+            lines.extend(XA.rotate_block(axis, keys, dataref))
+        return lines or None
+    return None
+
+
+def _eval_lines(lines, dataref, v):
+    """Evaluate generated ANIM_* lines at a dataref value.
+
+    Uses the parser itself, so what is checked is exactly what will be written.
+    """
+    text = ("I\n800\nOBJ\n\nPOINT_COUNTS 3 0 0 3\n\n"
+            "VT 0 0 0 0 1 0 0 0\nVT 1 0 0 0 1 0 1 0\n"
+            "VT 0 0 1 0 1 0 0 1\nIDX10 0 1 2\n\nANIM_begin\n"
+            + "\n".join(lines) +
+            "\nTRIS 0 3\nANIM_end\n")
+    anim = XA.build(OC.parse_text(text))
+    return anim.matrix_at({dataref: v}, 0)
+
+
+def _probe_positions(frames):
+    """Midpoints between the keys: where a wrong curve shows up."""
+    ts = [value_of(f) for f in frames]
+    return [(a + b) / 2.0 for a, b in zip(ts, ts[1:])]
+
+
+def _verify_generated(context, rig, frames, lines, report=None):
+    """Do the generated lines reproduce the motion *between* the keys?
+
+    Keys alone prove nothing: two datarefs composed (gear deploy plus tire
+    steer) look exactly like one hinge at both ends, and bow away in the middle.
+    Sampling the midpoints catches that, which is the difference between a
+    faithful export and a plausible one.
+    """
+    dataref = rig.get(PROP_DATAREF, "") or ""
+    try:
+        v1, v2 = json.loads(rig.get(PROP_ANIM_RANGE, "[0, 1]"))
+    except (ValueError, TypeError):
+        v1, v2 = 0.0, 1.0
+    probes = _probe_positions(frames)
+    if not probes:
+        return True
+    probe_frames = [frame_of(t) for t in probes]
+    actual = _xp_matrices(_sample_one(context, rig, probe_frames))
+    for t, want in zip(probes, actual):
+        got = Matrix([list(row) for row in
+                      _eval_lines(lines, dataref, v1 + (v2 - v1) * t)])
+        delta = max(abs(got[i][j] - want[i][j])
+                    for i in range(4) for j in range(4))
+        if delta > 1e-3:
+            if report:
+                report({'INFO'}, "%s: written animation would stray %.3f at "
+                                 "%.0f%% of the range -- kept from the file"
+                       % (rig.name, delta, t * 100.0))
+            return False
+    return True
 
 
 def build_anim_blocks(context, header, report=None):
@@ -1194,19 +1381,122 @@ def build_anim_blocks(context, header, report=None):
     rigs = [ob for ob in header.children if is_rig(ob)]
     if not rigs:
         return {}
-    samples = _sample_rigs(context, rigs)
+    plans, samples = _sample_rigs(context, rigs, report)
     out = {}
     for rig in rigs:
         leaf = rig.get(PROP_LEAF)
         if leaf is None:
             continue
-        mats = [XA.to_xp([[m[i][j] for j in range(4)] for i in range(4)])
-                for m in samples[rig.name]]
-        mats = [Matrix([list(row) for row in m]) for m in mats]
-        lines = _anim_lines(rig, mats, report)
-        if lines:
+        frames = plans[rig.name]
+        mats = _xp_matrices([samples[rig.name][f] for f in frames])
+        drefs = json.loads(rig.get(PROP_ANIM_DATAREFS, "[]") or "[]")
+        if len(drefs) > 1:
+            if report:
+                report({'WARNING'},
+                       "%s: driven by %d datarefs (%s); a single key table "
+                       "cannot carry both, so its animation is kept from the "
+                       "file" % (rig.name, len(drefs), ", ".join(drefs)))
+            continue
+        lines = _anim_lines(rig, frames, mats, report)
+        if lines is None:
+            # Not a hinge (two rotations about different axes composed, say a
+            # wiper arm and blade).  A flat key table cannot express that: the
+            # batch keeps the animation it came in with, see export_header.
+            continue
+        if lines and _verify_generated(context, rig, frames, lines, report):
             out[int(leaf)] = lines
     return out
+
+
+def _swap_animation(template, regenerate, header, report=None):
+    """Event stream with only the regenerable batches' animation replaced.
+
+    `regenerate` is {leaf index: generated ANIM_* lines}.  A batch can only be
+    regenerated if every ANIM block around it holds nothing but regenerable
+    batches -- otherwise removing the block's own commands would strip the
+    animation off a batch that is being kept.  Batches that cannot be
+    regenerated keep the animation they came in with, which is the only honest
+    option: their motion is not a hinge, and a flat key table would send them
+    somewhere else.  Those are reported, because an edit made to them in Blender
+    is NOT written.
+    """
+    if not template.events:
+        return template.events, None
+    anim = XA.build(template)
+    if not anim.blocks:
+        if regenerate and report:
+            report({'WARNING'}, "%s: no ANIM_begin block to put the animation "
+                                 "in" % header.name)
+        return template.events, None
+
+    known = set(regenerate)
+    strip = set()
+    for block in anim.blocks:
+        leaves = set(leaf for leaf in anim.leaves
+                     if block in anim.leaves[leaf])
+        if leaves & known and not (leaves - known):
+            strip.add(block.index)
+
+    usable = {}
+    for leaf in sorted(known):
+        chain = anim.leaves.get(leaf) or []
+        if chain and all(block.index in strip for block in chain):
+            usable[leaf] = regenerate[leaf]
+        elif report:
+            report({'WARNING'},
+                   "%s: batch %d (%s) is not a single-axis hinge; its animation "
+                   "is kept from the file and changes made in Blender to it are "
+                   "NOT written" % (header.name, leaf,
+                                    anim.leaves[leaf][-1].index))
+    if not usable:
+        if report:
+            report({'WARNING'}, "%s: nothing could be regenerated, the "
+                                 "animation is written as it came in"
+                   % header.name)
+        return template.events, None
+
+    drop_events = set()
+    for block in anim.blocks:
+        if block.index not in strip:
+            continue
+        for cmd in block.commands:
+            if "ev" in cmd:
+                drop_events.add(cmd["ev"])
+            drop_events.update(cmd.get("key_ev", ()))
+            if "end_ev" in cmd:
+                drop_events.add(cmd["end_ev"])
+    # an emptied ANIM_begin/ANIM_end pair is legal but pointless: drop it when
+    # the block holds nothing but the batches that now carry their own block
+    events = template.events
+    for block in anim.blocks:
+        if block.index not in strip or block.end_ev is None:
+            continue
+        material = False
+        for index in range(block.begin_ev + 1, block.end_ev):
+            if index in drop_events:
+                continue
+            kind, payload = events[index]
+            if kind == OC.EV_RAW:
+                material = True
+                break
+            if kind == OC.EV_LEAF and payload not in usable:
+                material = True
+                break
+        if not material:
+            drop_events.add(block.begin_ev)
+            drop_events.add(block.end_ev)
+
+    kept = []
+    for index, (kind, payload) in enumerate(events):
+        if index in drop_events:
+            continue
+        kept.append((kind, payload))
+    header["xp8_anim_written"] = json.dumps(sorted(usable))
+    if report:
+        report({'INFO'}, "%s: %d of %d animated batches written from Blender"
+               % (os.path.basename(header.get(PROP_SOURCE, header.name)),
+                  len(usable), len(anim.leaves)))
+    return kept, usable
 
 
 def export_header(context, header, filepath, uv_name=None, preserve=True,
@@ -1237,12 +1527,10 @@ def export_header(context, header, filepath, uv_name=None, preserve=True,
 
     leaf_blocks = None
     if animation == "BLENDER":
-        template.events = XA.strip_animation(template.events)
-        leaf_blocks = build_anim_blocks(context, header, report)
         preserve = False
-        if not leaf_blocks and report:
-            report({'WARNING'}, "%s: no animated parts in Blender, writing "
-                                 "the geometry without animation" % header.name)
+        regenerate = build_anim_blocks(context, header, report)
+        template.events, leaf_blocks = _swap_animation(
+            template, regenerate, header, report)
 
     skip = set()
     if only is not None:

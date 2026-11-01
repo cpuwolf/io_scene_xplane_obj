@@ -235,12 +235,15 @@ class Animation(object):
                 if keys_open is None:
                     self.warnings.append("%s with no open table" % kw)
                     continue
-                keys_open[1]["keys"].append(_parse_key(kw, words))
+                cmd = keys_open[1]
+                cmd.setdefault("key_ev", []).append(ev_index)
+                cmd["keys"].append(_parse_key(kw, words))
                 continue
             if kw in ("ANIM_rotate_end", "ANIM_trans_end"):
                 if keys_open is None:
                     self.warnings.append("%s with no open table" % kw)
                     continue
+                keys_open[1]["end_ev"] = ev_index
                 stack[-1].commands.append(keys_open[1])
                 keys_open = None
                 continue
@@ -249,6 +252,8 @@ class Animation(object):
                 stack[-1].commands.append(keys_open[1])
                 keys_open = None
             cmd = _parse_cmd(kw, words)
+            if cmd is not None:
+                cmd["ev"] = ev_index
             if cmd is None:
                 if kw in ANIM_KW:
                     self.warnings.append("unparsed animation command: %s"
@@ -276,7 +281,28 @@ class Animation(object):
         return out
 
     def ranges(self):
-        """{dataref: (vmin, vmax)} -- the value span each animation covers."""
+        """{dataref: (vmin, vmax)} of the **transform** keys -- the time line.
+
+        Visibility ranges are deliberately left out: an `ANIM_show 0.1 999` next
+        to a `0..1` rotate would stretch the dataref's span to 999 and squash
+        every transform key into the first thousandth of the time line.
+        """
+        return self._ranges(transforms=True)
+
+    def visibility_ranges(self):
+        """{dataref: (vmin, vmax)} of datarefs driven only by show/hide."""
+        out = self._ranges(transforms=False)
+        for dref in self.ranges():
+            out.pop(dref, None)
+        return out
+
+    def pose_ranges(self):
+        """What a pose sweeps: transforms, plus visibility-only datarefs."""
+        out = self.visibility_ranges()
+        out.update(self.ranges())
+        return out
+
+    def _ranges(self, transforms=True):
         out = {}
         for blk in self.blocks:
             for cmd in blk.commands:
@@ -284,13 +310,19 @@ class Animation(object):
                 if not d:
                     continue
                 if cmd["kind"] in (CMD_ROTATE, CMD_TRANS):
+                    if not transforms:
+                        continue
                     lo, hi = sorted((cmd["v1"], cmd["v2"]))
                 elif cmd["kind"] in (CMD_ROTATE_KEYS, CMD_TRANS_KEYS):
+                    if not transforms:
+                        continue
                     if not cmd["keys"]:
                         continue
                     lo = cmd["keys"][0][0]
                     hi = cmd["keys"][-1][0]
                 elif cmd["kind"] in (CMD_SHOW, CMD_HIDE):
+                    if transforms:
+                        continue
                     lo, hi = sorted((cmd["v1"], cmd["v2"]))
                 else:
                     continue
@@ -358,6 +390,61 @@ class Animation(object):
                     vals.add(cmd["v1"])
                     vals.add(cmd["v2"])
         return sorted(vals)
+
+    def transform_datarefs(self, leaf=None):
+        """Datarefs that actually move the batch (show/hide does not count).
+
+        A batch driven by more than one of them cannot be re-keyed into a single
+        key table: the table has one x axis, so the second dataref's effect would
+        be lost (a gear leg that folds *and* steers would stop steering, without
+        any error).
+        """
+        out = []
+        blocks = self.blocks if leaf is None else (self.leaves.get(leaf) or [])
+        for blk in blocks:
+            for cmd in blk.commands:
+                if cmd["kind"] not in (CMD_ROTATE, CMD_ROTATE_KEYS, CMD_TRANS,
+                                       CMD_TRANS_KEYS):
+                    continue
+                dref = cmd.get("dataref")
+                if dref and dref not in out:
+                    out.append(dref)
+        return out
+
+    def normalized_values(self, leaf=None):
+        """Where the chain's own keys sit on the 0..1 time line.
+
+        The time line is "every dataref from its lowest keyed value to its
+        highest", so each raw key value maps to its own fraction of its own
+        dataref's range.  These are the positions the keys belong at: an
+        animation written as three keys must come back as three keys, not as a
+        hundred samples of the line between them.
+        """
+        rng = self.ranges()
+        out = set()
+        blocks = self.blocks if leaf is None else (self.leaves.get(leaf) or [])
+        for blk in blocks:
+            for cmd in blk.commands:
+                dref = cmd.get("dataref")
+                if not dref:
+                    continue
+                if cmd["kind"] in (CMD_ROTATE, CMD_TRANS):
+                    vals = (cmd["v1"], cmd["v2"])
+                elif "keys" in cmd:
+                    vals = tuple(k for k, _ in cmd["keys"])
+                elif cmd["kind"] in (CMD_SHOW, CMD_HIDE):
+                    vals = (cmd["v1"], cmd["v2"])
+                else:
+                    continue
+                lo, hi = rng.get(dref, (0.0, 1.0))
+                if hi == lo:
+                    continue
+                for v in vals:
+                    t = (v - lo) / (hi - lo)
+                    out.add(min(1.0, max(0.0, round(t, 6))))
+        out.add(0.0)
+        out.add(1.0)
+        return sorted(out)
 
 
 def _parse_key(kw, words):
@@ -492,6 +579,17 @@ def static_trans(p, dataref="no_ref"):
     return "ANIM_trans %s %s 0 0 %s" % (body, body, dataref)
 
 
+def static_rotate(axis, degrees, dataref="no_ref"):
+    """A constant rotation, written as a two-endpoint command with equal angles.
+
+    The exporter uses it for the part's rest orientation, so that the animated
+    half of the rotation stays about one fixed axis.
+    """
+    return "ANIM_rotate %s %s %s %s %s 0 0 %s" % (
+        OC.fmt_num(axis[0]), OC.fmt_num(axis[1]), OC.fmt_num(axis[2]),
+        OC.fmt_num(degrees), OC.fmt_num(degrees), dataref)
+
+
 def trans_block(keys, dataref):
     """(v, (x, y, z)) pairs -> ANIM_trans_begin / keys / end."""
     out = ["ANIM_trans_begin %s" % dataref]
@@ -590,3 +688,117 @@ def simplify(points, tol):
         keep.append(best)
         i = best
     return [points[k] for k in keep]
+
+# ---------------------------------------------------------------------------
+# how many keys does this animation actually need?
+# ---------------------------------------------------------------------------
+
+def _axis_180(rel):
+    """Rotation axis of a 180 degree rotation, where the skew part vanishes."""
+    diag = [rel[i][i] + 1.0 for i in range(3)]
+    j = max(range(3), key=lambda i: diag[i])
+    v = [rel[i][j] + (1.0 if i == j else 0.0) for i in range(3)]
+    n = math.sqrt(sum(x * x for x in v))
+    return tuple(x / n for x in v) if n > 1e-9 else None
+
+
+def _fit_single_axis(mats):
+    """(rest rotation, axis, [angle in degrees]) if the family is a hinge.
+
+    Every sample is written as `rest . R(axis, angle)`: `rest` is what a static
+    ANIM_rotate in the file puts the part at, everything the dataref does on top
+    of it is one axis.  A pure translation (no rotation at all) fits with a
+    zero angle.  Returns None when the samples do not have that shape.
+    """
+    rest = tuple(row[:3] for row in mats[0])
+    rt = _transpose3(rest)
+    rels = [_mul3(rt, tuple(row[:3] for row in m)) for m in mats]
+    found = []
+    axis = None
+    for rel in rels:
+        tr = rel[0][0] + rel[1][1] + rel[2][2]
+        cos = max(-1.0, min(1.0, (tr - 1.0) * 0.5))
+        angle = math.degrees(math.acos(cos))
+        skew = (rel[2][1] - rel[1][2], rel[0][2] - rel[2][0],
+                rel[1][0] - rel[0][1])
+        n = math.sqrt(sum(v * v for v in skew))
+        ax = None
+        if n > 1e-9:
+            ax = tuple(v / n for v in skew)
+        elif angle > 1e-6:
+            ax = _axis_180(rel)
+        found.append((angle, ax))
+        if ax is not None and axis is None:
+            axis = ax
+    if axis is None:
+        return rest, (0.0, 0.0, 1.0), [0.0] * len(rels)
+
+    angles = []
+    for rel, (angle, ax) in zip(rels, found):
+        if ax is None:
+            angles.append(0.0)
+            continue
+        signed = angle if sum(a * b for a, b in zip(axis, ax)) >= 0 else -angle
+        check = mat_rot(axis, signed)
+        if max(abs(check[i][j] - rel[i][j])
+               for i in range(3) for j in range(3)) > 1e-4:
+            return None
+        angles.append(signed)
+    return rest, axis, angles
+
+
+def _pose_at_t(ranges, t):
+    return {d: lo + (hi - lo) * t for d, (lo, hi) in ranges.items()}
+
+
+def refine_keys(anim, leaf, tol=1e-3, max_keys=33):
+    """The smallest set of key positions that reproduces the leaf's motion.
+
+    The file's own keys are the starting point -- a hinge needs exactly those.
+    Two datarefs composed (gear deploy *and* tire steer), or two rotations about
+    different axes driven by one dataref, bow away from the straight line between
+    keys; there the missing keys are added where the bow shows, and only there,
+    so a three-key animation stays three keys and a curved one gets as many as it
+    needs to stay within `tol` of the real path.
+
+    Returns the positions, or None when the motion is not a hinge at all (the
+    caller then leaves the file's animation alone).
+    """
+    if len(anim.transform_datarefs(leaf)) > 1:
+        return None                     # one key table cannot carry two datarefs
+    ts = anim.normalized_values(leaf)
+    if len(ts) < 2:
+        return ts
+    ranges = anim.ranges()
+    if not ranges:
+        return ts
+    for _ in range(8):
+        mats = [anim.matrix_at(_pose_at_t(ranges, t), leaf) for t in ts]
+        fitted = _fit_single_axis(mats)
+        if fitted is None:
+            return None
+        rest, axis, angles = fitted
+        offsets = [(m[0][3], m[1][3], m[2][3]) for m in mats]
+        worst = None
+        for i in range(len(ts) - 1):
+            t1, t2 = ts[i], ts[i + 1]
+            for k in (0.25, 0.5, 0.75):
+                t = t1 + (t2 - t1) * k
+                want = anim.matrix_at(_pose_at_t(ranges, t), leaf)
+                angle = angles[i] + (angles[i + 1] - angles[i]) * k
+                off = tuple(a + (b - a) * k
+                            for a, b in zip(offsets[i], offsets[i + 1]))
+                model = _mul3(rest, mat_rot(axis, angle))
+                dev = max(abs(model[r][c] - want[r][c])
+                          for r in range(3) for c in range(3))
+                dev = max(dev, max(abs(off[c] - want[c][3]) for c in range(3)))
+                if dev > tol and (worst is None or dev > worst[0]):
+                    worst = (dev, t)
+        if worst is None:
+            return ts
+        if len(ts) >= max_keys:
+            return None
+        if any(abs(worst[1] - t) < 1e-6 for t in ts):
+            return None
+        ts = sorted(ts + [round(worst[1], 6)])
+    return None
