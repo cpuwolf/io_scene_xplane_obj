@@ -223,6 +223,44 @@ def main():
         if b.warnings:
             print("    warnings:", b.warnings[:4])
 
+    # ---- 3. ANIM_show/hide must play on the time line --------------------
+    print("\n3. ANIM_show/hide on the time line:")
+    scene = bpy.context.scene
+    checked = 0
+    for src, h in sorted(headers.items()):
+        anim = XA.build(OC.parse(src))
+        names = json.loads(h.get(XM.PROP_LEAF_OBJS, "[]") or "[]")
+        if not anim.blocks:
+            continue
+        bad = 0
+        for leaf, chain in anim.leaves.items():
+            if not any(cmd["kind"] in (XA.CMD_SHOW, XA.CMD_HIDE)
+                       for block in chain for cmd in block.commands):
+                continue
+            if leaf >= len(names) or not names[leaf]:
+                continue
+            ob = bpy.data.objects.get(names[leaf])
+            if ob is None:
+                continue
+            for position in (0.0, 0.25, 0.5, 0.75, 1.0):
+                pose = {d: lo + (hi - lo) * position
+                        for d, (lo, hi) in anim.pose_ranges().items()}
+                scene.frame_set(int(round(XM.frame_of(position))))
+                want = anim.visible_at(pose, leaf)
+                if ob.hide_viewport == want:
+                    bad += 1
+                    if bad <= 3:
+                        print("   FAIL %s: %s at %.0f%% is %s, the file says %s"
+                              % (os.path.basename(src), ob.name,
+                                 position * 100.0,
+                                 "hidden" if ob.hide_viewport else "drawn",
+                                 "drawn" if want else "hidden"))
+            checked += 1
+        check(not bad, "%s: %d show/hide evaluations disagree with the file"
+              % (os.path.basename(src), bad))
+    print("  %d animated batch(es) with ANIM_show/hide checked at 5 positions"
+          % checked)
+
     print("\n%s" % ("ALL CHECKS PASSED" if not fails
                     else "%d CHECK(S) FAILED:\n  " % len(fails)
                          + "\n  ".join(fails)))

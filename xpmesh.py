@@ -68,6 +68,7 @@ PROP_ANIM_DATAREFS = "xp8_anim_datarefs"
 PROP_ANIM_VIS = "xp8_anim_vis"
 PROP_ANIM_ACTION = "xp8_anim_action"
 PROP_ANIM_KEYS = "xp8_anim_keys"
+PROP_ANIM_VIS_ACTION = "xp8_anim_vis_action"
 
 ROLE_HEADER = "header"
 ROLE_TRIS = "tris"
@@ -165,6 +166,13 @@ def _chain_matrix(ob):
             continue                # preview only: never part of the file
         m = m @ (node.matrix_parent_inverse @ node.matrix_basis)
     return m
+
+
+def show_part(ob):
+    """Make one batch visible no matter what hid it."""
+    ob.hide_viewport = False
+    ob.hide_render = False
+    return ob
 
 
 def is_rig(obj):
@@ -435,7 +443,8 @@ def _fcurve(action, ob, data_path, index):
     return action.fcurve_ensure_for_datablock(ob, data_path, index=index)
 
 
-def _write_curve(action, ob, data_path, index, frames, values):
+def _write_curve(action, ob, data_path, index, frames, values,
+                 interp='LINEAR'):
     fc = _fcurve(action, ob, data_path, index)
     n = len(frames)
     fc.keyframe_points.add(n)
@@ -444,9 +453,10 @@ def _write_curve(action, ob, data_path, index, frames, values):
         co.append(float(f))
         co.append(float(v))
     fc.keyframe_points.foreach_set("co", co)
-    # a dataref is linearly interpolated by the sim, so the preview must be too
+    # a dataref is linearly interpolated by the sim, so the preview must be too;
+    # show/hide is a step, and a step is CONSTANT
     for kp in fc.keyframe_points:
-        kp.interpolation = 'LINEAR'
+        kp.interpolation = interp
     fc.update()
 
 
@@ -506,6 +516,67 @@ def bake_rig_action(rig, anim, leaf, overrides=None):
                      [q[axis] for q in quats])
     rig[PROP_ANIM_ACTION] = action.name
     rig[PROP_ANIM_KEYS] = json.dumps([round(t, 6) for t in ts])
+    return action
+
+
+def visibility_steps(anim, leaf, ranges):
+    """[(timeline position, visible)] -- the ANIM_show/hide step function.
+
+    `visible_at` is piecewise constant in the dataref, so mapping every
+    show/hide boundary onto the time line gives the exact schedule: it says
+    nothing about keys, and nothing about transforms, just "from here on, drawn
+    or not drawn".
+    """
+    breaks = set([0.0, 1.0])
+    for block in anim.leaves.get(leaf) or []:
+        for cmd in block.commands:
+            if cmd["kind"] not in (XA.CMD_SHOW, XA.CMD_HIDE):
+                continue
+            lo, hi = ranges.get(cmd.get("dataref"), (0.0, 1.0))
+            if hi == lo:
+                continue
+            for v in (cmd["v1"], cmd["v2"]):
+                t = (v - lo) / (hi - lo)
+                if not (-1e-9 <= t <= 1.0 + 1e-9):
+                    continue
+                t = min(1.0, max(0.0, t))
+                breaks.add(round(t, 6))
+                # a zero-width range (ANIM_show 2 2) is visible at that one
+                # value and not one step later, so the state right after the
+                # boundary has to be sampled too
+                breaks.add(round(min(1.0, t + 1e-3), 6))
+    out = []
+    for t in sorted(breaks):
+        pose = {d: lo + (hi - lo) * t for d, (lo, hi) in ranges.items()}
+        visible = anim.visible_at(pose, leaf)
+        if out and out[-1][1] == visible:
+            continue                   # a step that changes nothing
+        out.append((t, visible))
+    return out
+
+
+def bake_visibility(ob, anim, leaf, ranges):
+    """Keyframe `hide_viewport` / `hide_render` from the ANIM_show/hide schedule.
+
+    Without this a batch that the file draws only at some dataref values is
+    hidden at import and *stays* hidden however far the time line is dragged --
+    which makes the part impossible to find, let alone edit.  Step keys with
+    CONSTANT interpolation are exactly what show/hide means, and Blender does
+    evaluate animated `hide_viewport` (checked: the object really disappears and
+    comes back as the frame changes).
+    """
+    steps = visibility_steps(anim, leaf, ranges)
+    if not steps or all(visible for _, visible in steps):
+        return None                     # always drawn: nothing to animate
+    action = bpy.data.actions.new(ob.name + "_vis")
+    action.use_fake_user = True
+    ob.animation_data_create()
+    ob.animation_data.action = action
+    frames = [frame_of(t) for t, _ in steps]
+    hidden = [0.0 if visible else 1.0 for _, visible in steps]
+    for path in ("hide_viewport", "hide_render"):
+        _write_curve(action, ob, path, 0, frames, hidden, interp='CONSTANT')
+    ob[PROP_ANIM_VIS_ACTION] = action.name
     return action
 
 
@@ -588,6 +659,7 @@ def import_file(context, path, into_collection=None, report=None,
     leaf_objs = [None] * len(obj8.leaves)
     vline_pts = _parse_line_rows(obj8.vline)
     rigs = []
+    hidden = []
 
     for leaf_index, leaf in enumerate(obj8.leaves):
         if leaf.kind == "TRIS":
@@ -616,12 +688,22 @@ def import_file(context, path, into_collection=None, report=None,
                 list(ranges.get(drefs[0], (0.0, 1.0))) if drefs else (0.0, 1.0))
             rig[PROP_ANIM_VIS] = json.dumps(_chain_visibility(chain))
             ob.parent = rig
-            if not anim.visible_at(pose, leaf_index):
+            visible = anim.visible_at(pose, leaf_index)
+            if not visible:
                 ob.hide_viewport = True
                 ob.hide_render = True
+                hidden.append(ob.name)
             rigs.append((rig, leaf_index))
         leaf_objs[leaf_index] = ob.name
 
+    if anim is not None and bake_actions:
+        for name in leaf_objs:
+            ob = bpy.data.objects.get(name) if name else None
+            if ob is None:
+                continue
+            leaf_index = ob.get(PROP_LEAF, -1)
+            if leaf_index in anim.leaves:
+                bake_visibility(ob, anim, leaf_index, anim.pose_ranges())
     if rigs and bake_actions:
         for rig, leaf_index in rigs:
             bake_rig_action(rig, anim, leaf_index, overrides)
@@ -662,6 +744,12 @@ def import_file(context, path, into_collection=None, report=None,
     header.select_set(True)
     context.view_layer.objects.active = header
 
+    if hidden:
+        header["xp8_hidden_parts"] = len(hidden)
+        warnings.append(
+            "%d part(s) are not drawn at this dataref value (ANIM_show): %s. "
+            "Drag the time line to bring them back, or use 'Show all parts' in "
+            "the X-Plane panel" % (len(hidden), ", ".join(hidden[:6])))
     if rigs:
         header["xp8_anim_parts"] = len(rigs)
     for w in warnings:

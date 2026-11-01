@@ -52,9 +52,15 @@ input, so the time line *is* the dataref:
   or as fine as the animation really is. Keys are only added where the motion
   between them is not a straight line (two datarefs composing, a rotation about
   two axes): there the extra keys are what makes the preview honest;
-* `ANIM_show`/`ANIM_hide` cannot be keyframed, so a batch hidden at the import
-  pose is simply hidden in the viewport; the visibility commands themselves are
-  kept and travel back with the rig.
+* `ANIM_show`/`ANIM_hide` become **step keyframes on `hide_viewport` /
+  `hide_render`** (`CONSTANT` interpolation, one key per visibility boundary),
+  so scrubbing the time line makes the parts appear and disappear exactly as the
+  file says — icing shapes at their level, the prop disc at 0 rpm. A batch the
+  file does not draw at the current value is hidden at import, and the import
+  report says how many; **Show All Parts** in the X-Plane panel reveals
+  everything for editing and **Restore Visibility** puts the schedule back.
+  The `ANIM_show`/`ANIM_hide` lines themselves stay in `xp8_anim_vis` and are
+  what gets written back — the keyframes are a preview, not the source.
 
 **Import** options: *Animation at* (0..1, where to look — the pose you edit in),
 *Pin datarefs* (`dref=value, …` to hold one still while the rest sweeps, e.g. a
@@ -157,7 +163,8 @@ damage the text.
 | `xp8_leaf_objs` | Empty | batch index → object name |
 | `xp8_fingerprints`, `xp8_cmd_hash` | Empty | what the "was anything changed?" test compares |
 | `xp8_leaf` | mesh | which batch it is |
-| `xp8_leaf`, `xp8_dataref`, `xp8_anim_range`, `xp8_anim_datarefs`, `xp8_anim_vis`, `xp8_anim_action` | rig Empty | the batch it drives, its driving dataref and value range, the visibility commands, the baked Action |
+| `xp8_leaf`, `xp8_dataref`, `xp8_anim_range`, `xp8_anim_datarefs`, `xp8_anim_vis`, `xp8_anim_action`, `xp8_anim_keys` | rig Empty | the batch it drives, its driving dataref and value range, the visibility commands, the baked Action and the key positions it was built from |
+| `xp8_anim_vis_action` | mesh | the Action holding the step keys that show/hide the batch on the time line |
 | `xp8_placement` | mesh | legacy: a static `ANIM_trans` offset, still honoured on export |
 | `xp8_vt` | mesh attribute | source `VT` row index per vertex, so untouched rows keep their exact text |
 
