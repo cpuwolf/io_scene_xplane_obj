@@ -63,7 +63,9 @@ PROP_LEAF_STATES = "xp8_leaf_states"
 PROP_CMD_HASH = "xp8_cmd_hash"
 # animation rig (one Empty per animated batch)
 PROP_DATAREF = "xp8_dataref"
-PROP_ANIM_RANGE = "xp8_anim_range"
+PROP_ANIM_RANGE = "xp8_anim_range"          # legacy JSON, read as a fallback
+PROP_ANIM_MIN = "xp8_value_min"
+PROP_ANIM_MAX = "xp8_value_max"
 PROP_ANIM_DATAREFS = "xp8_anim_datarefs"
 PROP_ANIM_VIS = "xp8_anim_vis"
 PROP_ANIM_ACTION = "xp8_anim_action"
@@ -166,6 +168,30 @@ def _chain_matrix(ob):
             continue                # preview only: never part of the file
         m = m @ (node.matrix_parent_inverse @ node.matrix_basis)
     return m
+
+
+def rig_range(rig):
+    """(value at frame 1, value at frame 101) of a rig's dataref.
+
+    Stored as two plain float properties, so both are editable in the side panel
+    (`layout.prop(rig, '["xp8_value_min"]')`) instead of a JSON blob.
+    """
+    lo = rig.get(PROP_ANIM_MIN)
+    hi = rig.get(PROP_ANIM_MAX)
+    if lo is not None and hi is not None:
+        return float(lo), float(hi)
+    try:
+        v1, v2 = json.loads(rig.get(PROP_ANIM_RANGE, "[0, 1]"))
+        return float(v1), float(v2)
+    except (ValueError, TypeError):
+        return 0.0, 1.0
+
+
+def set_rig_range(rig, lo, hi):
+    rig[PROP_ANIM_MIN] = float(lo)
+    rig[PROP_ANIM_MAX] = float(hi)
+    rig[PROP_ANIM_RANGE] = json.dumps([float(lo), float(hi)])
+    return rig
 
 
 def show_part(ob):
@@ -684,8 +710,8 @@ def import_file(context, path, into_collection=None, report=None,
             rig[PROP_LEAF] = leaf_index
             rig[PROP_ANIM_DATAREFS] = json.dumps(drefs)
             rig[PROP_DATAREF] = drefs[0] if drefs else ""
-            rig[PROP_ANIM_RANGE] = json.dumps(
-                list(ranges.get(drefs[0], (0.0, 1.0))) if drefs else (0.0, 1.0))
+            set_rig_range(rig, *list(ranges.get(drefs[0], (0.0, 1.0)))
+                          if drefs else (0.0, 1.0))
             rig[PROP_ANIM_VIS] = json.dumps(_chain_visibility(chain))
             ob.parent = rig
             visible = anim.visible_at(pose, leaf_index)
@@ -1367,16 +1393,22 @@ def _anim_lines(rig, frames, mats, report=None):
             report({'WARNING'}, "%s: no dataref, animation not written"
                    % rig.name)
         return None
-    try:
-        v1, v2 = json.loads(rig.get(PROP_ANIM_RANGE, "[0, 1]"))
-    except (ValueError, TypeError):
-        v1, v2 = 0.0, 1.0
+    v1, v2 = rig_range(rig)
     n = len(mats)
     vs = [v1 + (v2 - v1) * value_of(frame) for frame in frames]
 
     lines = []
+    # if the driving dataref was renamed in the panel, a show/hide that watched
+    # the old name watches the new one: it is the same animation
+    try:
+        original = (json.loads(rig.get(PROP_ANIM_DATAREFS, "[]") or "[]")
+                    or [""])[0]
+    except (ValueError, TypeError):
+        original = ""
     for entry in json.loads(rig.get(PROP_ANIM_VIS, "[]") or "[]"):
         kind, a, b, dref = entry
+        if dref and original and dref == original and dataref != original:
+            dref = dataref
         lines.append(XA.visibility_block(kind == XA.CMD_SHOW, a, b,
                                         dref or dataref))
 
@@ -1441,10 +1473,7 @@ def _verify_generated(context, rig, frames, lines, report=None):
     faithful export and a plausible one.
     """
     dataref = rig.get(PROP_DATAREF, "") or ""
-    try:
-        v1, v2 = json.loads(rig.get(PROP_ANIM_RANGE, "[0, 1]"))
-    except (ValueError, TypeError):
-        v1, v2 = 0.0, 1.0
+    v1, v2 = rig_range(rig)
     probes = _probe_positions(frames)
     if not probes:
         return True

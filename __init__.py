@@ -450,11 +450,98 @@ class OBJECT_OT_xp8_anim_rig(bpy.types.Operator):
             ob.matrix_parent_inverse.identity()
         rig[XM.PROP_LEAF] = ob.get(XM.PROP_LEAF, -1)
         rig[XM.PROP_DATAREF] = self.dataref
-        rig[XM.PROP_ANIM_RANGE] = json.dumps([self.v1, self.v2])
+        XM.set_rig_range(rig, self.v1, self.v2)
         if not rig.get(XM.PROP_ANIM_VIS):
             rig[XM.PROP_ANIM_VIS] = "[]"
         self.report({'INFO'}, "%s: rig %s driven by %s (%g..%g)"
                     % (ob.name, rig.name, self.dataref, self.v1, self.v2))
+        return {'FINISHED'}
+
+
+# ---------------------------------------------------------------------------
+# animation dataref: pick one of the datarefs this object already uses
+# ---------------------------------------------------------------------------
+
+def dataref_candidates(header):
+    """Datarefs this object mentions: the rigs first, then the command stream."""
+    out = []
+    for rig in [c for c in header.children if XM.is_rig(c)]:
+        dref = (rig.get(XM.PROP_DATAREF) or "").strip()
+        if dref and dref not in out:
+            out.append(dref)
+    for kind, line in _json_list(header.get(XM.PROP_EVENTS, "[]")):
+        if kind != "R" or not line:
+            continue
+        for word in line.split():
+            if "/" not in word or word.startswith("#"):
+                continue
+            if word not in out:
+                out.append(word)
+    return out
+
+
+def _pick_datarefs(self, context):
+    """EnumProperty items: what can be picked without typing."""
+    obj = context.active_object
+    header = _find_header(obj)
+    names = dataref_candidates(header) if header is not None else []
+    if not names:
+        return [("", "(none in this object)", "no dataref found")]
+    return [(n, n, "") for n in names[:200]]
+
+
+@_add
+class OBJECT_OT_xp8_pick_dataref(bpy.types.Operator):
+    """Set the driving dataref on the selected animation rigs"""
+    bl_idname = "object.xp8_pick_dataref"
+    bl_label = "Pick Dataref"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    dataref: EnumProperty(name="Dataref", items=_pick_datarefs,
+                          description="A dataref this object already uses; "
+                                      "any other name can be typed into the "
+                                      "Dataref field of the panel")
+
+    @classmethod
+    def poll(cls, context):
+        return any(XM.is_rig(ob) for ob in context.selected_objects)
+
+    def execute(self, context):
+        n = 0
+        for ob in context.selected_objects:
+            if XM.is_rig(ob):
+                ob[XM.PROP_DATAREF] = self.dataref
+                n += 1
+        self.report({'INFO'}, "%d rig(s) driven by %s" % (n, self.dataref))
+        return {'FINISHED'}
+
+
+@_add
+class OBJECT_OT_xp8_clear_visibility(bpy.types.Operator):
+    """Stop hiding this part; the exported file keeps it drawn forever"""
+    bl_idname = "object.xp8_clear_visibility"
+    bl_label = "Clear Visibility Rules"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return any(XM.is_rig(ob) for ob in context.selected_objects)
+
+    def execute(self, context):
+        n = 0
+        for ob in context.selected_objects:
+            if not XM.is_rig(ob):
+                continue
+            ob[XM.PROP_ANIM_VIS] = "[]"
+            for child in ob.children:
+                XM.show_part(child)
+                action = child.get(XM.PROP_ANIM_VIS_ACTION)
+                if action:
+                    child.animation_data_clear()
+                    child.pop(XM.PROP_ANIM_VIS_ACTION, None)
+            n += 1
+        self.report({'INFO'}, "%d part(s) are now drawn at every dataref value"
+                    % n)
         return {'FINISHED'}
 
 
@@ -553,14 +640,33 @@ class VIEW3D_PT_xplane_obj(bpy.types.Panel):
         if XM.is_rig(obj):
             abox = layout.box()
             abox.label(text="animation rig", icon='ARMATURE_DATA')
-            col = abox.column(align=True)
-            col.label(text="dataref: %s" % (obj.get(XM.PROP_DATAREF)
-                                            or "(none)"))
-            col.label(text="range: %s" % obj.get(XM.PROP_ANIM_RANGE,
-                                                 "[0, 1]"))
+            if XM.PROP_DATAREF not in obj:
+                XM.set_rig_range(obj, 0.0, 1.0)
+                obj[XM.PROP_DATAREF] = ""
+            # plain custom properties, so these are ordinary editable fields
+            abox.prop(obj, '["%s"]' % XM.PROP_DATAREF, text="Dataref")
+            if not (obj.get(XM.PROP_DATAREF) or "").strip():
+                abox.label(text="no dataref: nothing will be written",
+                           icon='ERROR')
+            row = abox.row(align=True)
+            row.prop(obj, '["%s"]' % XM.PROP_ANIM_MIN, text="Value@1")
+            row.prop(obj, '["%s"]' % XM.PROP_ANIM_MAX, text="@101")
+            abox.operator("object.xp8_pick_dataref", icon='PRESET',
+                          text="Pick a dataref from this object")
+            vis = _json_list(obj.get(XM.PROP_ANIM_VIS, "[]"))
+            if vis:
+                box = abox.box()
+                box.label(text="ANIM_show/hide", icon='HIDE_ON')
+                for kind, a, b, dref in vis:
+                    box.label(text="%s %g..%g  %s" % (kind, a, b, dref))
+                box.operator("object.xp8_clear_visibility", icon='X',
+                             text="Drop the show/hide rules")
+            keys = _json_list(obj.get(XM.PROP_ANIM_KEYS, "[]"))
+            info = abox.column(align=True)
+            info.label(text="%d keyframe(s), frames 1..101 = the value range"
+                       % len(keys))
             if obj.get(XM.PROP_ANIM_ACTION):
-                col.label(text="action: %s" % obj[XM.PROP_ANIM_ACTION])
-            col.label(text="frames 1..101 = dataref min..max")
+                info.label(text="action: %s" % obj[XM.PROP_ANIM_ACTION])
 
         if XM.is_batch(obj):
             part = layout.box()

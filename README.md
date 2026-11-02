@@ -78,9 +78,24 @@ uses what you set on the mesh itself — so an untouched import is still byte
 identical, and a part you *move* in Blender exports at the new position.
 
 To *author* a new animation, select a batch and press **Animate Part** in the
-N-panel (category *X-Plane*): it creates the rig, and you set the dataref and
-its value range there. Keyframe the rig's location/rotation, export with
-**From Blender (rigs)**.
+N-panel (category *X-Plane*): it creates the rig. Keyframe the rig's
+location/rotation, export with **From Blender (rigs)**.
+
+### The dataref is a field, not hidden data
+
+Select a rig and the panel shows the animation in three editable controls:
+
+| control | what it does |
+| --- | --- |
+| **Dataref** | the sim variable that drives the part — type any name, or use *Pick a dataref from this object* to choose one the file already uses. Changing it renames what the exported `ANIM_rotate_key` table is keyed on (a `show`/`hide` that watched the old name follows) |
+| **Value@1 / @101** | the dataref values at the two ends of the time line, i.e. what the keys' x values mean. `0..1` for a ratio, `-18..89` for prop pitch |
+| **Drop the show/hide rules** | the `ANIM_show`/`ANIM_hide` ranges this part carries; dropping them makes the part drawn at every value |
+
+All three are plain custom properties (`xp8_dataref`, `xp8_value_min`,
+`xp8_value_max`, `xp8_anim_vis`), so they are also visible in the object's
+*Custom Properties* list and survive a save. Nothing about the animation is
+hidden in a file you cannot reach — the only thing that comes from elsewhere is
+the keyframe *count*, which follows the file's own keys at import.
 
 A rotation is written as one `ANIM_rotate_begin` axis/angle table — exactly the
 shape a hinge has — preceded by an `ANIM_rotate` for the rest orientation when
