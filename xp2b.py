@@ -428,6 +428,8 @@ class _Converter(object):
                    for cat, raws in state):
                 self._no_draw_material(ob, base)
             self._apply_light_level(ob, state)
+            self._apply_camera_state(ob, state)
+            self._apply_shade_and_shiny(ob, state)
             if apply_manipulator(ob, state, self.warnings):
                 coll.xplane.layer.export_type = "cockpit"
             self._check_state(state, ob.name)
@@ -503,10 +505,61 @@ class _Converter(object):
                     mat.xplane.lightLevel_v2 = v2
                     mat.xplane.lightLevel_dataref = dref
 
+    def _apply_camera_state(self, ob, state):
+        """ATTR_solid_camera -> material.xplane.solid_camera (also a material attr)."""
+        for cat, raws in state or []:
+            if cat != "camera":
+                continue
+            for raw in raws:
+                kw = raw.split()[0] if raw.split() else ""
+                if kw == "ATTR_solid_camera":
+                    value = True
+                elif kw == "ATTR_no_solid_camera":
+                    value = False
+                else:
+                    continue
+                for slot in ob.material_slots:
+                    mat = slot.material
+                    if mat is None or mat.xplane.solid_camera == value:
+                        continue
+                    clone = mat.copy()
+                    clone.name = mat.name + "_cam"
+                    slot.material = clone
+                    clone.xplane.solid_camera = value
+
+    def _apply_shade_and_shiny(self, ob, state):
+        """ATTR_shade_flat/smooth -> polygon shading, ATTR_shiny_rat -> specular.
+
+        Both are things XPlane2Blender derives from Blender itself, so copying
+        the value across is the whole conversion.
+        """
+        for cat, raws in state or []:
+            if cat == "shade":
+                for raw in raws:
+                    kw = raw.split()[0] if raw.split() else ""
+                    if kw not in ("ATTR_shade_flat", "ATTR_shade_smooth"):
+                        continue
+                    smooth = kw == "ATTR_shade_smooth"
+                    ob.data.polygons.foreach_set("use_smooth",
+                                                 [smooth] * len(ob.data.polygons))
+                    ob.data.update()
+            elif cat == "shiny":
+                for raw in raws:
+                    words = raw.split()
+                    if not words or words[0] != "ATTR_shiny_rat":
+                        continue
+                    try:
+                        value = float(words[1])
+                    except (IndexError, ValueError):
+                        continue
+                    for slot in ob.material_slots:
+                        if slot.material is not None:
+                            slot.material.specular_intensity = value
+
     def _check_state(self, state, name):
-        keep = {"manip", "draw", "shade", "blend", "shiny", "cull", "depth",
-                "shadow", "cockpit", "solid_camera", "draped", "hud",
-                "light_level"}
+        # only what is really mapped - anything else has to be reported, or the
+        # file comes back looking fine with a state line silently missing
+        keep = {"manip", "draw", "light_level", "camera", "shiny", "shade"}
         for cat, raws in state or []:
             if cat in keep:
                 continue
