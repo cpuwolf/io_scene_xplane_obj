@@ -16,14 +16,21 @@ What survives the conversion
   become plain transforms, keyed tables become dataref + keyframes)
 * ``ANIM_hide`` / ``ANIM_show`` as XP2B ``hide`` / ``show`` datarefs
 * ``ATTR_draw_disable`` as a material copy with ``draw = False``
+* ``ATTR_light_level`` as the material's light-level fields
 * manipulators (the common signatures: command family, toggle, push, radio,
   delta/wrap, drag axis) as ``object.xplane.manip``
 * the geometry, with its materials and UVs, as the importer already built it
 
-What does NOT: ``LIGHT_*``, ``ATTR_LOD``, ``IF/ENDIF``, ``ATTR_light_level``,
+What does NOT: ``LIGHT_*`` primitives, ``ATTR_LOD``, ``IF/ENDIF``, ``MAGNET``,
 ``ATTR_hard``, unknown ATTR categories, and drag-rotate/detent manipulators.
-They are reported as warnings - the conversion is one-way and lossy by design,
+XPlane2Blender cannot be handed those as commands, so they are dropped and
+counted in a warning per file - the conversion is one-way and lossy by design,
 which is exactly why the source scene is left untouched.
+
+One structural note: a block that carries both a translation table and a
+rotation table becomes two nested Empty levels, because each dataref gets its
+own object.  ``ANIM_begin`` therefore appears twice where the file had one;
+the composition order is unchanged.
 """
 
 import json
@@ -374,6 +381,8 @@ class _Converter(object):
             innermost[block.index] = self.empties_for_block(block, parent,
                                                             coll, base)
 
+        self._report_dropped_commands(obj8)
+
         frame_end = max(1, self.frames_used)
         self.scene.frame_start = 1
         self.scene.frame_end = max(self.scene.frame_end, frame_end)
@@ -402,6 +411,14 @@ class _Converter(object):
             ob.rotation_mode = 'XYZ'
             ob.rotation_euler = (0.0, 0.0, 0.0)
             ob.scale = (1.0, 1.0, 1.0)
+            # The importer bakes ANIM_show/hide into a keyframed
+            # hide_viewport, and XPlane2Blender reads that flag when it
+            # collects: a part hidden at frame 1 becomes
+            # "export_animation_only" and its geometry is dropped without a
+            # word. The visibility now lives on the datarefs above, so the
+            # preview Action goes away.
+            ob.animation_data_clear()
+            ob.hide_set(False)
             ob.hide_viewport = False
             ob.hide_render = False
 
@@ -410,6 +427,7 @@ class _Converter(object):
             if any(cat == "draw" and "ATTR_draw_disable" in raws
                    for cat, raws in state):
                 self._no_draw_material(ob, base)
+            self._apply_light_level(ob, state)
             if apply_manipulator(ob, state, self.warnings):
                 coll.xplane.layer.export_type = "cockpit"
             self._check_state(state, ob.name)
@@ -418,6 +436,29 @@ class _Converter(object):
         if not made:
             self.warn("%s: no geometry was moved" % base)
         return coll
+
+    def _report_dropped_commands(self, obj8):
+        """Lights, LODs and IF blocks are commands XPlane2Blender cannot take
+        from us - say how many, per file. Silence here would look like success."""
+        counts = {}
+        for kind, payload in obj8.events:
+            if kind != OC.EV_RAW or not payload:
+                continue
+            kw = payload.split()[0]
+            if kw.startswith("LIGHT"):
+                key = "LIGHT_* primitives"
+            elif kw == "ATTR_LOD":
+                key = "ATTR_LOD levels"
+            elif kw in ("IF", "ENDIF"):
+                key = "IF/ENDIF blocks"
+            elif kw.startswith("MAGNET"):
+                key = "MAGNET entries"
+            else:
+                continue
+            counts[key] = counts.get(key, 0) + 1
+        for key, n in sorted(counts.items()):
+            self.warn("%d %s were dropped: XPlane2Blender cannot be handed them, "
+                      "re-add them there by hand" % (n, key))
 
     # -- per-part helpers -------------------------------------------------
     def _no_draw_material(self, ob, base):
@@ -432,9 +473,40 @@ class _Converter(object):
                 clone.xplane.draw = False
                 slot.material = clone
 
+    def _apply_light_level(self, ob, state):
+        """ATTR_light_level -> material.xplane.lightLevel_* (an XP2B material attr)."""
+        for cat, raws in state or []:
+            if cat != "light_level":
+                continue
+            for raw in raws:
+                words = raw.split()
+                if not words or words[0] != "ATTR_light_level":
+                    continue
+                try:
+                    v1, v2, dref = float(words[1]), float(words[2]), words[3]
+                except (IndexError, ValueError):
+                    self.warn("%s: ATTR_light_level arguments not parsed"
+                              % ob.name)
+                    continue
+                for slot in ob.material_slots:
+                    mat = slot.material
+                    if mat is None:
+                        continue
+                    if getattr(mat.xplane, "lightLevel_dataref", "") not in ("",
+                                                                            dref):
+                        clone = mat.copy()
+                        clone.name = mat.name + "_light"
+                        slot.material = clone
+                        mat = clone
+                    mat.xplane.lightLevel = True
+                    mat.xplane.lightLevel_v1 = v1
+                    mat.xplane.lightLevel_v2 = v2
+                    mat.xplane.lightLevel_dataref = dref
+
     def _check_state(self, state, name):
         keep = {"manip", "draw", "shade", "blend", "shiny", "cull", "depth",
-                "shadow", "cockpit", "solid_camera", "draped", "hud"}
+                "shadow", "cockpit", "solid_camera", "draped", "hud",
+                "light_level"}
         for cat, raws in state or []:
             if cat in keep:
                 continue
@@ -443,8 +515,6 @@ class _Converter(object):
                 if kw in ("ATTR_LOD",):
                     self.warn("%s: %s is not converted (XPlane2Blender writes "
                               "LOD from the collection layer)" % (name, kw))
-                elif kw.startswith("ATTR_light_level"):
-                    self.warn("%s: %s is not converted" % (name, kw))
                 elif kw.startswith("ATTR_manip_"):
                     pass
                 else:

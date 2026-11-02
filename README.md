@@ -193,6 +193,42 @@ Editing `xp8_events`, `xp8_globals` or `xp8_leaf_states` and exporting does reac
 the file: the untouched-file shortcut switches itself off as soon as any of them,
 or any geometry, differs from what was imported.
 
+## Handing the scene to XPlane2Blender
+
+The model above is for *editing an existing file*: the command stream is kept
+verbatim and written back around your geometry, which is why an untouched file
+is byte-identical.  XPlane2Blender works the other way round - it rebuilds every
+`ANIM_*` block from the object tree - so it has no way to echo raw commands and
+is the wrong tool for that job.
+
+What it *is* the right tool for is authoring: manipulators, new animations,
+lights, LODs.  `object.xp8_to_xp2b` (panel button: *author with XPlane2Blender*)
+is the one-way bridge.  With an imported object selected it builds a new
+exportable collection next to it:
+
+| in the file | in the XPlane2Blender collection |
+|---|---|
+| `ANIM_begin/end` nesting | a chain of Empties |
+| `ANIM_trans_begin` + keys | an Empty with a `transform` dataref and one location key per file key |
+| `ANIM_rotate_begin` + keys | an Empty with `rotation_mode = AXIS_ANGLE` (the file's axis, verbatim) |
+| static `ANIM_trans` / `ANIM_rotate` | plain Empty transforms |
+| `ANIM_show` / `ANIM_hide` | `show` / `hide` datarefs with the file's range |
+| `ATTR_draw_disable` | a material copy with *Draw Objects With This Material* off |
+| `ATTR_light_level` | the material's light-level fields |
+| `ATTR_manip_*` | `object.xplane.manip` (command family, toggle, push, radio, delta/wrap, drag axis) |
+
+The imported scene is left untouched, so the lossless path stays available.
+The conversion is lossy in a known way and says so: `LIGHT_*` primitives,
+`ATTR_LOD`, `IF/ENDIF` and `MAGNET` cannot be handed to XPlane2Blender as
+commands, so they are dropped with a warning per file (the counts are also
+stored on the new collection as `xp2b_convert_warnings`).
+
+Measured on Laminar's C90B exterior: `ANIM_*`/`ATTR_*` text comes out
+line-for-line identical apart from 1e-4-level float rounding, triangle counts
+are exact (fuselage 19697, lights 1558), and one block that carries both a
+translation and a rotation table comes out as two nested `ANIM_begin` blocks -
+same composition order, same result.
+
 ## Known limits
 
 * `LINES` are imported read-only and exported from their stored indices; light
