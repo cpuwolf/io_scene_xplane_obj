@@ -173,7 +173,7 @@ def _chain_matrix(ob):
 
 
 def rig_range(rig):
-    """(value at frame 1, value at frame 101) of a rig's dataref.
+    """(value at the rig's first key, value at its last key).
 
     Stored as two plain float properties, so both are editable in the side panel
     (`layout.prop(rig, '["xp8_value_min"]')`) instead of a JSON blob.
@@ -301,17 +301,20 @@ def _subdivide(cmd, values):
 
 
 def spread_frames(count):
-    """Frames for `count` keys: frame 1 .. frame 101, evenly by key index.
+    """Frames for `count` keys: frame 1 .. frame `count`, one key per frame.
 
-    Not by dataref value: real gauges key on things like
+    This is XPlane2Blender's convention and the reason it is not "1..101": XP2B
+    samples the pose at the frames the dataref keys sit on, so key N belongs on
+    frame N.  A scene authored here and a scene authored there then agree about
+    which frame means which state - and a key table with 3 keys stays 3 keys
+    instead of being smeared over 101 frames.
+
+    Not by dataref value either: real gauges key on things like
     `-9999, 0, 0.0126, 0.0252, ... , 9999`, where a value-linear time line
     squeezes twenty keys into two adjacent frames and they collapse into one
-    keyframe.  One key per frame keeps every state reachable and every key
-    distinct, which is what the file means.
+    keyframe.
     """
-    if count <= 1:
-        return [1.0]
-    return [1.0 + SPAN * i / (count - 1.0) for i in range(count)]
+    return [float(i + 1) for i in range(max(1, count))]
 
 
 def chain_transforms(chain):
@@ -579,10 +582,14 @@ def _rig_for(context, coll, header, name, m_bl):
     return rig
 
 
-#: the time line spans frame 1 .. frame SPAN+1, and that span *is* every
+#: legacy layout for rigs with no key map: frame 1 .. frame SPAN+1, that *is* every
 #: dataref going from its lowest keyed value to its highest
 SPAN = 100
 SAMPLES = SPAN + 1
+
+#: Minimum frame distance between two ANIM_show/hide boundaries (preview only).
+#: Blender merges keyframes that are closer than about 1/24 of a frame.
+VIS_MIN_STEP = 0.1
 
 
 def _fcurve(action, ob, data_path, index):
@@ -610,14 +617,30 @@ def _write_curve(action, ob, data_path, index, frames, values,
     fc.update()
 
 
-def frame_of(t):
-    """Time-line position (0..1) -> frame."""
-    return 1.0 + t * SPAN
+def frame_of(t, keys=None):
+    """Time-line position (0..1) -> frame, for a table with `keys` keys.
+
+    One key per frame, so `keys` keys occupy frames 1..keys.  Without `keys`
+    the old uniform 1..101 layout is assumed, which is all a rig from an older
+    import or a hand-made rig has.
+    """
+    n = max(2, int(keys)) if keys else SAMPLES
+    return 1.0 + t * (n - 1.0)
 
 
-def value_of(frame):
-    """Frame -> time-line position (0..1)."""
-    return (frame - 1.0) / SPAN
+def value_of(frame, keys=None):
+    """Frame -> time-line position (0..1); the inverse of `frame_of`."""
+    n = max(2, int(keys)) if keys else SAMPLES
+    return (frame - 1.0) / (n - 1.0)
+
+
+def timeline_keys(anim, leaf):
+    """How many frames this batch's time line spans: its longest key table."""
+    best = 0
+    for cmd in chain_transforms(anim.leaves.get(leaf) or []):
+        if cmd.get("dataref") and cmd.get("keys"):
+            best = max(best, len(cmd["keys"]))
+    return max(2, best)
 
 
 def bake_command_action(rig, cmd, overrides=None):
@@ -626,8 +649,8 @@ def bake_command_action(rig, cmd, overrides=None):
     One command = one dataref = one key table, so the keyframes are exactly the
     file's keys: a two-endpoint `ANIM_trans` gives two keys, a three-key
     `ANIM_rotate_key` table gives three.  Blender cannot read a dataref, so the
-    time line *is* the dataref: frame 1 is the command's lowest keyed value,
-    frame 101 its highest.
+    time line *is* the key table: key 1 sits on frame 1, key N on frame N, the
+    same frame-for-key mapping XPlane2Blender uses.
     """
     dataref = cmd.get("dataref")
     if dataref is None:
@@ -716,7 +739,18 @@ def bake_visibility(ob, anim, leaf, ranges):
     action.use_fake_user = True
     ob.animation_data_create()
     ob.animation_data.action = action
-    frames = [frame_of(t) for t, _ in steps]
+    keys = timeline_keys(anim, leaf)     # preview only: the range is what is written
+    frames = []
+    for t, _ in steps:
+        frame = frame_of(t, keys)
+        # Blender drops keyframes that sit closer together than ~1/24 frame,
+        # so two show/hide boundaries a hair apart in value space collapse into
+        # one key and the part never comes back.  With one key per frame the
+        # whole time line can be two frames long, which is exactly when that
+        # happens.  CONSTANT interpolation means a nudge is invisible.
+        if frames and frame < frames[-1] + VIS_MIN_STEP:
+            frame = frames[-1] + VIS_MIN_STEP
+        frames.append(frame)
     hidden = [0.0 if visible else 1.0 for _, visible in steps]
     for path in ("hide_viewport", "hide_render"):
         _write_curve(action, ob, path, 0, frames, hidden, interp='CONSTANT')
@@ -857,7 +891,13 @@ def import_file(context, path, into_collection=None, report=None,
         for rig, cmd in rigs_made:
             bake_command_action(rig, cmd, overrides)
         # the animated properties are now owned by the Actions
-        context.scene.frame_set(int(round(frame_of(anim_position))))
+        if anim.leaves:
+            # the time line is the key table: one key per frame, so the scene
+            # ends where the longest table does (XPlane2Blender's convention)
+            span = max(timeline_keys(anim, i) for i in anim.leaves)
+            context.scene.frame_set(int(round(frame_of(anim_position, span))))
+            context.scene.frame_start = 1
+            context.scene.frame_end = max(2, span)
 
     header[PROP_GLOBALS] = json.dumps(obj8.globals)
     header[PROP_EVENTS] = json.dumps([[k, p] for k, p in obj8.events])
@@ -1596,8 +1636,17 @@ def _eval_lines(lines, dataref, v):
 
 
 def _probe_positions(frames):
-    """Midpoints between the keys: where a wrong curve shows up."""
-    ts = [value_of(f) for f in frames]
+    """Midpoints between the keys: where a wrong curve shows up.
+
+    `frames` is the rig's own key layout (key N on frame N), so the value
+    position of each key is its index along the table, not frame/101.
+    """
+    if len(frames) < 2:
+        return []
+    lo, hi = frames[0], frames[-1]
+    if hi == lo:
+        return []
+    ts = [(f - lo) / (hi - lo) for f in frames]
     return [(a + b) / 2.0 for a, b in zip(ts, ts[1:])]
 
 
@@ -1614,7 +1663,7 @@ def _verify_generated(context, rig, frames, lines, report=None):
     probes = _probe_positions(frames)
     if not probes:
         return True
-    probe_frames = [frame_of(t) for t in probes]
+    probe_frames = [(a + b) / 2.0 for a, b in zip(frames, frames[1:])]
     actual = _xp_matrices(_sample_one(context, rig, probe_frames))
     for t, want in zip(probes, actual):
         got = Matrix([list(row) for row in

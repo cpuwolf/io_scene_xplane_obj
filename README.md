@@ -48,8 +48,12 @@ input, so the time line *is* the dataref:
   yoke-hide, then a roll rotate) is a chain, so each dataref keeps its own
   values and its own keys instead of being squashed into one;
 * each rig also gets an **Action** with **one keyframe per key the file has**,
-  spread over frames 1..101 *by key index* — a two-endpoint `ANIM_rotate`
-  becomes two keyframes, a 15-key gauge table fifteen. Index, not dataref value:
+  **key N on frame N** — a two-endpoint `ANIM_rotate` becomes two keyframes,
+  a 15-key gauge table fifteen. That is XPlane2Blender's convention too (its
+  export samples the pose at the frames the dataref keys sit on), so a scene
+  authored here and one authored there agree about which frame means which
+  state, and a three-key table stays three frames wide instead of being smeared
+  over a hundred. Index, not dataref value:
   real gauges key on things like `-9999, 0, 0.0126, 0.0252, …, 9999`, and a
   value-linear time line squeezes all twenty keys into two adjacent frames where
   they collapse into one. Linear keys, because that is how the file
@@ -94,7 +98,7 @@ Select a rig and the panel shows the animation in three editable controls:
 | control | what it does |
 | --- | --- |
 | **Dataref** | the sim variable that drives the part — type any name, or use *Pick a dataref from this object* to choose one the file already uses. Changing it renames what the exported `ANIM_rotate_key` table is keyed on (a `show`/`hide` that watched the old name follows) |
-| **Value@1 / @101** | the dataref values at the two ends of the time line, i.e. what the keys' x values mean. `0..1` for a ratio, `-18..89` for prop pitch |
+| **Value@1 / @last key** | the dataref values at the first and last key of the table, i.e. what the keys' x values mean. `0..1` for a ratio, `-18..89` for prop pitch |
 | **Drop the show/hide rules** | the `ANIM_show`/`ANIM_hide` ranges this part carries; dropping them makes the part drawn at every value |
 
 All three are plain custom properties (`xp8_dataref`, `xp8_value_min`,

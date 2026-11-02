@@ -35,8 +35,9 @@ Animation
 A dataref is a value the sim owns at run time, so "the animation" cannot be
 copied into Blender; it can be *sampled* and *re-keyed*.  Every batch inside an
 ANIM block gets a rig Empty holding the transform its datarefs select at the
-import pose, plus an Action whose time line is the dataref (frame 1..101 = the
-keyed value range), so the parts move on the time line like they do in the sim.
+import pose, plus an Action whose time line *is* the key table: key 1 sits on
+frame 1, key N on frame N - the same frame-per-key layout XPlane2Blender uses,
+so a scene authored here and one authored there agree about every frame.
 Export can either write the command stream back untouched, or regenerate every
 ANIM_* block from those Actions (`ANIM_rotate_key` / `ANIM_trans_key` tables).
 
@@ -123,7 +124,7 @@ class IMPORT_OT_xplane_obj(bpy.types.Operator, ImportHelper):
     bake_actions: BoolProperty(
         name="Bake Actions",
         description="Write the animation into an Action per part, so dragging "
-                    "the time line (frame 1..101 = dataref min..max) plays it",
+                    "the time line (one key per frame) plays it",
         default=True)
 
     def execute(self, context):
@@ -422,11 +423,11 @@ class OBJECT_OT_xp8_anim_rig(bpy.types.Operator):
         name="Dataref",
         description="The sim variable that drives this part; it becomes the "
                     "x axis of the exported ANIM_rotate_key / ANIM_trans_key "
-                    "table (frame 1..101 = the value range below)",
+                    "table (key 1 on frame 1, key 2 on frame 2)",
         default="sim/flightmodel2/misc/door_open_ratio")
 
-    v1: FloatProperty(name="Value at frame 1", default=0.0)
-    v2: FloatProperty(name="Value at frame 101", default=1.0)
+    v1: FloatProperty(name="Value at key 1 (frame 1)", default=0.0)
+    v2: FloatProperty(name="Value at key 2 (frame 2)", default=1.0)
 
     @classmethod
     def poll(cls, context):
@@ -698,7 +699,7 @@ class VIEW3D_PT_xplane_obj(bpy.types.Panel):
             else:
                 row = abox.row(align=True)
                 row.prop(obj, '["%s"]' % XM.PROP_ANIM_MIN, text="Value@1")
-                row.prop(obj, '["%s"]' % XM.PROP_ANIM_MAX, text="@101")
+                row.prop(obj, '["%s"]' % XM.PROP_ANIM_MAX, text="@last key")
             abox.operator("object.xp8_pick_dataref", icon='PRESET',
                           text="Pick a dataref from this object")
             vis = _json_list(obj.get(XM.PROP_ANIM_VIS, "[]"))

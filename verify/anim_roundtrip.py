@@ -250,10 +250,15 @@ def main():
             ob = bpy.data.objects.get(names[leaf])
             if ob is None:
                 continue
+            keys = XM.timeline_keys(anim, leaf)   # frames 1..keys
             for position in (0.0, 0.25, 0.5, 0.75, 1.0):
                 pose = {d: lo + (hi - lo) * position
                         for d, (lo, hi) in anim.pose_ranges().items()}
-                scene.frame_set(int(round(XM.frame_of(position))))
+                frame = XM.frame_of(position, keys)
+                scene.frame_set(int(frame), subframe=frame - int(frame))
+                # animated hide_viewport is only readable after the depsgraph
+                # has caught up with the frame change
+                bpy.context.view_layer.update()
                 want = anim.visible_at(pose, leaf)
                 if ob.hide_viewport == want:
                     bad += 1
