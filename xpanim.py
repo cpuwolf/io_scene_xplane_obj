@@ -231,6 +231,10 @@ class Animation(object):
                 self.warnings.append("%s outside any ANIM_begin: %s"
                                      % (kw, payload[:60]))
                 continue
+            if kw == "ANIM_keyframe_loop":
+                # legacy loop marker; it sits inside a key table and says the
+                # table repeats, which changes nothing we evaluate
+                continue
             if kw in ("ANIM_rotate_key", "ANIM_trans_key"):
                 if keys_open is None:
                     self.warnings.append("%s with no open table" % kw)
@@ -318,8 +322,11 @@ class Animation(object):
                         continue
                     if not cmd["keys"]:
                         continue
-                    lo = cmd["keys"][0][0]
-                    hi = cmd["keys"][-1][0]
+                    # real files list keys in any order (a gauge table can put
+                    # its 2250 sentinel between 220 and 260), so take the span,
+                    # not the first and last line
+                    vals = [k for k, _ in cmd["keys"]]
+                    lo, hi = min(vals), max(vals)
                 elif cmd["kind"] in (CMD_SHOW, CMD_HIDE):
                     if transforms:
                         continue

@@ -69,7 +69,9 @@ PROP_ANIM_MAX = "xp8_value_max"
 PROP_ANIM_DATAREFS = "xp8_anim_datarefs"
 PROP_ANIM_VIS = "xp8_anim_vis"
 PROP_ANIM_ACTION = "xp8_anim_action"
-PROP_ANIM_KEYS = "xp8_anim_keys"
+PROP_ANIM_KEYS = "xp8_anim_keys"       # the command's key VALUES
+PROP_ANIM_FRAMES = "xp8_anim_frames"   # the frame each of those keys sits on
+PROP_ANIM_CMD = "xp8_anim_cmd"
 PROP_ANIM_VIS_ACTION = "xp8_anim_vis_action"
 
 ROLE_HEADER = "header"
@@ -199,6 +201,128 @@ def show_part(ob):
     ob.hide_viewport = False
     ob.hide_render = False
     return ob
+
+
+def rigs(header):
+    """Every rig under a header, outermost first."""
+    out = []
+
+    def walk(node):
+        for child in node.children:
+            if is_rig(child):
+                out.append(child)
+            if is_rig(child) or is_batch(child):
+                walk(child)
+
+    walk(header)
+    return out
+
+
+def leaf_rigs(ob):
+    """The rig chain of one batch, outermost first.
+
+    A compound animation (pitch translate, then a yoke-hide, then a roll
+    rotate) is one rig per transform command, nested, so each rig carries
+    exactly one dataref and exactly as many keyframes as the file has keys.
+    """
+    out = []
+    node = ob.parent if ob is not None else None
+    hops = 0
+    while node is not None and hops < 64:
+        if not is_rig(node):
+            break
+        out.append(node)
+        node = node.parent
+        hops += 1
+    return list(reversed(out))
+
+
+def _is_identity(cmd, pose):
+    """True when a command contributes nothing at this pose (and has no dataref)."""
+    if cmd.get("dataref"):
+        return False
+    m = XA.cmd_matrix(cmd, pose)
+    return all(abs(m[i][j] - (1.0 if i == j else 0.0)) < 1e-9
+               for i in range(4) for j in range(4))
+
+
+def command_range(cmd):
+    """(vmin, vmax) of one animation command."""
+    if cmd["kind"] in (XA.CMD_ROTATE, XA.CMD_TRANS):
+        return tuple(sorted((cmd["v1"], cmd["v2"])))
+    keys = cmd.get("keys") or []
+    if keys:
+        return keys[0][0], keys[-1][0]
+    return 0.0, 0.0
+
+
+def command_values(cmd):
+    """The dataref values a command has a key at, low to high."""
+    if cmd["kind"] in (XA.CMD_ROTATE, XA.CMD_TRANS):
+        return sorted((cmd["v1"], cmd["v2"]))
+    vals = sorted(k for k, _ in (cmd.get("keys") or []))
+    return vals or [0.0, 1.0]
+
+
+#: Blender interpolates a quaternion between two keys along the *short* arc, so
+#: a 350 degree gauge sweep cannot be written with two keys; it needs enough keys
+#: that no step exceeds this many degrees.
+MAX_STEP_DEG = 170.0
+
+
+def _angle_at(cmd, v):
+    """The command's rotation angle at a dataref value, as the file means it."""
+    if cmd["kind"] == XA.CMD_ROTATE:
+        return XA._lerp(v, cmd["v1"], cmd["v2"], cmd["r1"], cmd["r2"])
+    keys = sorted(cmd.get("keys") or [])
+    if not keys:
+        return 0.0
+    return XA._key_lookup(keys, v)
+
+
+def _subdivide(cmd, values):
+    """Add the keys a >180 degree rotation needs to be interpolable.
+
+    `ANIM_rotate_key 0 0 / ANIM_rotate_key 1 349.99988` is a needle sweeping 350
+    degrees.  The rotation *matrix* at 350 looks exactly like -10, so both the
+    quaternion Blender stores and the axis/angle pair would silently replay it
+    the short way round.  Splitting the span is the only way to keep the long
+    way -- a few extra keys, same motion.
+    """
+    if cmd["kind"] not in (XA.CMD_ROTATE, XA.CMD_ROTATE_KEYS) or len(values) < 2:
+        return values
+    out = [values[0]]
+    for a, b in zip(values, values[1:]):
+        step = abs(_angle_at(cmd, b) - _angle_at(cmd, a))
+        n = max(1, int(math.ceil(step / MAX_STEP_DEG)))
+        for i in range(1, n + 1):
+            out.append(a + (b - a) * i / float(n))
+    return out
+
+
+def spread_frames(count):
+    """Frames for `count` keys: frame 1 .. frame 101, evenly by key index.
+
+    Not by dataref value: real gauges key on things like
+    `-9999, 0, 0.0126, 0.0252, ... , 9999`, where a value-linear time line
+    squeezes twenty keys into two adjacent frames and they collapse into one
+    keyframe.  One key per frame keeps every state reachable and every key
+    distinct, which is what the file means.
+    """
+    if count <= 1:
+        return [1.0]
+    return [1.0 + SPAN * i / (count - 1.0) for i in range(count)]
+
+
+def chain_transforms(chain):
+    """The leaf's transform commands, in the order the file multiplies them."""
+    out = []
+    for block in chain or []:
+        for cmd in block.commands:
+            if cmd["kind"] in (XA.CMD_ROTATE, XA.CMD_ROTATE_KEYS,
+                               XA.CMD_TRANS, XA.CMD_TRANS_KEYS):
+                out.append(cmd)
+    return out
 
 
 def is_rig(obj):
@@ -496,36 +620,29 @@ def value_of(frame):
     return (frame - 1.0) / SPAN
 
 
-def bake_rig_action(rig, anim, leaf, overrides=None):
-    """Bake one batch's animation into an Action on its rig.
+def bake_command_action(rig, cmd, overrides=None):
+    """Bake one animation command into an Action on its own rig.
 
-    Blender cannot read a dataref, so the time line *is* the dataref: frame 1
-    is every dataref at its lowest keyed value, frame 101 at its highest.
-
-    The **keys are the file's keys**.  An `ANIM_rotate` with two endpoints gives
-    two keys, a three-key `ANIM_rotate_key` table gives three, and a chain whose
-    datarefs have different key positions gives their union.  Sampling the whole
-    range at a fixed grid instead would put keys where the file has none and
-    lose the bend of a non-uniform table -- and the round trip would no longer be
-    exact.
+    One command = one dataref = one key table, so the keyframes are exactly the
+    file's keys: a two-endpoint `ANIM_trans` gives two keys, a three-key
+    `ANIM_rotate_key` table gives three.  Blender cannot read a dataref, so the
+    time line *is* the dataref: frame 1 is the command's lowest keyed value,
+    frame 101 its highest.
     """
-    rng = anim.ranges()
-    ts = XA.refine_keys(anim, leaf)
-    if ts is None:
-        # not a hinge: the file's animation stays in the file (see
-        # _swap_animation), but the preview still has to look right
-        ts = [i / 16.0 for i in range(17)]
-    frames = [frame_of(t) for t in ts]
+    dataref = cmd.get("dataref")
+    if dataref is None:
+        return None                     # static: no keyframes to write
+    values = _subdivide(cmd, command_values(cmd))
+    frames = spread_frames(len(values))
     locs, quats = [], []
     prev = None
-    for t, frame in zip(ts, frames):
-        pose = {d: lo + (hi - lo) * t for d, (lo, hi) in rng.items()}
-        if overrides:
-            pose.update(overrides)
-        m = Matrix([list(r) for r in XA.to_bl(anim.matrix_at(pose, leaf))])
+    for v in values:
+        pose = dict(overrides or {})
+        pose[dataref] = v
+        m = Matrix([list(row) for row in XA.to_bl(XA.cmd_matrix(cmd, pose))])
         loc, quat, _scale = m.decompose()
         if prev is not None and quat.dot(prev) < 0.0:
-            quat.negate()          # keep the shortest arc between keys
+            quat.negate()               # keep the shortest arc between keys
         prev = quat
         locs.append(loc)
         quats.append(quat)
@@ -533,7 +650,7 @@ def bake_rig_action(rig, anim, leaf, overrides=None):
     action = bpy.data.actions.new(rig.name + "_anim")
     action.use_fake_user = True
     rig.animation_data_create()
-    rig.animation_data.action = action    # 5.x needs the slot before curves
+    rig.animation_data.action = action
     for axis in range(3):
         _write_curve(action, rig, "location", axis, frames,
                      [v[axis] for v in locs])
@@ -541,7 +658,8 @@ def bake_rig_action(rig, anim, leaf, overrides=None):
         _write_curve(action, rig, "rotation_quaternion", axis, frames,
                      [q[axis] for q in quats])
     rig[PROP_ANIM_ACTION] = action.name
-    rig[PROP_ANIM_KEYS] = json.dumps([round(t, 6) for t in ts])
+    rig[PROP_ANIM_KEYS] = json.dumps(values)
+    rig[PROP_ANIM_FRAMES] = json.dumps([round(f, 4) for f in frames])
     return action
 
 
@@ -684,7 +802,7 @@ def import_file(context, path, into_collection=None, report=None,
 
     leaf_objs = [None] * len(obj8.leaves)
     vline_pts = _parse_line_rows(obj8.vline)
-    rigs = []
+    rigs_made = []
     hidden = []
 
     for leaf_index, leaf in enumerate(obj8.leaves):
@@ -702,24 +820,29 @@ def import_file(context, path, into_collection=None, report=None,
         ob.matrix_parent_inverse.identity()
         ob[PROP_LEAF] = leaf_index
         chain = (anim.leaves.get(leaf_index) or []) if anim is not None else []
-        if any(block.commands for block in chain):
-            drefs = _chain_datarefs(chain)
-            rig = _rig_for(context, coll, header,
-                           "%s_%03d_anim" % (base, leaf_index),
-                           XA.to_bl(anim.matrix_at(pose, leaf_index)))
+        commands = [cmd for cmd in chain_transforms(chain)
+                    if cmd.get("dataref") or not _is_identity(cmd, pose)]
+        parent = header
+        for n, cmd in enumerate(commands):
+            m = XA.to_bl(XA.cmd_matrix(cmd, pose))
+            rig = _rig_for(context, coll, parent,
+                           "%s_%03d_anim%d" % (base, leaf_index, n), m)
             rig[PROP_LEAF] = leaf_index
-            rig[PROP_ANIM_DATAREFS] = json.dumps(drefs)
-            rig[PROP_DATAREF] = drefs[0] if drefs else ""
-            set_rig_range(rig, *list(ranges.get(drefs[0], (0.0, 1.0)))
-                          if drefs else (0.0, 1.0))
-            rig[PROP_ANIM_VIS] = json.dumps(_chain_visibility(chain))
-            ob.parent = rig
-            visible = anim.visible_at(pose, leaf_index)
-            if not visible:
+            dref = cmd.get("dataref") or ""
+            rig[PROP_DATAREF] = dref
+            rig[PROP_ANIM_DATAREFS] = json.dumps([dref] if dref else [])
+            rig[PROP_ANIM_CMD] = cmd["kind"]
+            set_rig_range(rig, *command_range(cmd))
+            parent = rig
+            rigs_made.append((rig, cmd))
+        if parent is not header:
+            ob.parent = parent
+        if anim is not None and chain:
+            ob[PROP_ANIM_VIS] = json.dumps(_chain_visibility(chain))
+            if not anim.visible_at(pose, leaf_index):
                 ob.hide_viewport = True
                 ob.hide_render = True
                 hidden.append(ob.name)
-            rigs.append((rig, leaf_index))
         leaf_objs[leaf_index] = ob.name
 
     if anim is not None and bake_actions:
@@ -730,9 +853,9 @@ def import_file(context, path, into_collection=None, report=None,
             leaf_index = ob.get(PROP_LEAF, -1)
             if leaf_index in anim.leaves:
                 bake_visibility(ob, anim, leaf_index, anim.pose_ranges())
-    if rigs and bake_actions:
-        for rig, leaf_index in rigs:
-            bake_rig_action(rig, anim, leaf_index, overrides)
+    if rigs_made and bake_actions:
+        for rig, cmd in rigs_made:
+            bake_command_action(rig, cmd, overrides)
         # the animated properties are now owned by the Actions
         context.scene.frame_set(int(round(frame_of(anim_position))))
 
@@ -776,8 +899,8 @@ def import_file(context, path, into_collection=None, report=None,
             "%d part(s) are not drawn at this dataref value (ANIM_show): %s. "
             "Drag the time line to bring them back, or use 'Show all parts' in "
             "the X-Plane panel" % (len(hidden), ", ".join(hidden[:6])))
-    if rigs:
-        header["xp8_anim_parts"] = len(rigs)
+    if rigs_made:
+        header["xp8_anim_parts"] = len(rigs_made)
     for w in warnings:
         if report:
             report({'WARNING'}, w)
@@ -1326,6 +1449,37 @@ def _unwrap(values):
     return out
 
 
+def key_map(rig):
+    """[(frame, value)] of a rig's keyframes, as baked from the file."""
+    try:
+        values = json.loads(rig.get(PROP_ANIM_KEYS, "[]") or "[]")
+        frames = json.loads(rig.get(PROP_ANIM_FRAMES, "[]") or "[]")
+    except (ValueError, TypeError):
+        return []
+    if len(values) != len(frames) or not values:
+        return []
+    return list(zip(frames, values))
+
+
+def _value_at(rig, frame):
+    """The dataref value at a frame, interpolating between the baked keys."""
+    pairs = key_map(rig)
+    if not pairs:
+        v1, v2 = rig_range(rig)
+        return v1 + (v2 - v1) * value_of(frame)
+    if len(pairs) == 1 or frame <= pairs[0][0]:
+        return pairs[0][1]
+    if frame >= pairs[-1][0]:
+        return pairs[-1][1]
+    for (f1, a), (f2, b) in zip(pairs, pairs[1:]):
+        if frame <= f2:
+            if f2 == f1:
+                return b
+            t = (frame - f1) / (f2 - f1)
+            return a + (b - a) * t
+    return pairs[-1][1]
+
+
 def _single_axis(quats):
     """(axis, angles in degrees) when every rotation is about one axis.
 
@@ -1379,57 +1533,40 @@ def _xp_matrices(mats):
 
 
 def _anim_lines(rig, frames, mats, report=None):
-    """ANIM_* lines for one batch, from the sampled rig transforms.
+    """The ANIM_* commands of one rig: at most one translate and one rotate.
 
-    The file has no matrix animation: a rotation is a sequence of axis/angle
-    pairs, so the sampled rotation is decomposed into Euler XYZ and written as
-    up to three rotate blocks.  Read back in file order the blocks multiply as
-    Rz . Ry . Rx, which is exactly what `Euler('XYZ').to_matrix()` builds, so
-    the geometry lands where Blender shows it.
+    One rig carries one command, so the sampled motion is a rotation about a
+    fixed axis (or none) plus a translation -- exactly what OBJ8 can say.  A rig
+    with no dataref is a placement: a fixed offset and/or a fixed turn.
     """
-    dataref = rig.get(PROP_DATAREF, "") or ""
-    if not dataref:
-        if report:
-            report({'WARNING'}, "%s: no dataref, animation not written"
-                   % rig.name)
-        return None
+    dataref = (rig.get(PROP_DATAREF) or "").strip()
     v1, v2 = rig_range(rig)
     n = len(mats)
-    vs = [v1 + (v2 - v1) * value_of(frame) for frame in frames]
-
+    vs = [_value_at(rig, frame) for frame in frames]
     lines = []
-    # if the driving dataref was renamed in the panel, a show/hide that watched
-    # the old name watches the new one: it is the same animation
-    try:
-        original = (json.loads(rig.get(PROP_ANIM_DATAREFS, "[]") or "[]")
-                    or [""])[0]
-    except (ValueError, TypeError):
-        original = ""
-    for entry in json.loads(rig.get(PROP_ANIM_VIS, "[]") or "[]"):
-        kind, a, b, dref = entry
-        if dref and original and dref == original and dataref != original:
-            dref = dataref
-        lines.append(XA.visibility_block(kind == XA.CMD_SHOW, a, b,
-                                        dref or dataref))
 
     trans = [m.translation.copy() for m in mats]
     spread = max(max(abs(t[i] - trans[0][i]) for t in trans) for i in range(3))
+    quats = [m.to_quaternion() for m in mats]
+    rest = quats[0].copy()
+    rel = [rest.inverted() @ q for q in quats]
+    moves = max(abs(q.angle) for q in rel)
+
+    if not dataref:
+        # a placement: nothing to key, just where the command puts the part
+        if max(abs(v) for v in trans[0]) > 1e-6:
+            lines.append(XA.static_trans(tuple(trans[0])))
+        if abs(rest.angle) > 1e-6:
+            lines.append(XA.static_rotate(rest.axis, math.degrees(rest.angle)))
+        return lines
+
     if spread > 1e-6:
         keys = [(vs[i], tuple(trans[i])) for i in range(n)]
         lines.extend(XA.trans_block(keys, dataref))
     elif max(abs(v) for v in trans[0]) > 1e-6:
         lines.append(XA.static_trans(tuple(trans[0])))
 
-    quats = [m.to_quaternion() for m in mats]
-    # Split the motion into "the rest orientation" and "what the dataref does to
-    # it".  The rest orientation is usually a static ANIM_rotate in the file
-    # (a part built axis-aligned and then turned into place); the animated part
-    # is then a plain hinge.  Requiring the *absolute* rotations to share an axis
-    # would reject exactly that pattern -- a 102 degree gear swing on top of a
-    # 90 degree static turn is not one axis, while the swing itself is.
-    rest = quats[0].copy()
-    rel = [rest.inverted() @ q for q in quats]
-    if max(abs(q.angle) for q in rel) < 1e-9:
+    if moves < 1e-9:
         # translation only (icing boots, sliding doors): nothing to rotate
         return lines or None
     single = _single_axis(rel)
@@ -1494,35 +1631,43 @@ def _verify_generated(context, rig, frames, lines, report=None):
 
 
 def build_anim_blocks(context, header, report=None):
-    """{leaf index: [ANIM_* lines]} regenerated from the rigs' Actions."""
-    rigs = [ob for ob in header.children if is_rig(ob)]
-    if not rigs:
-        return {}
-    plans, samples = _sample_rigs(context, rigs, report)
+    """{leaf index: [ANIM_* lines]} rebuilt from each batch's rig chain.
+
+    One rig = one command = one key table, so a compound animation comes out as
+    the same nest of commands it went in as: `ANIM_trans_begin ... ANIM_rotate_begin ...`
+    inside one block (composition is matrix-multiplication in file order, and
+    the block already wraps only this batch, so nesting is the same thing).
+    """
     out = {}
-    for rig in rigs:
-        leaf = rig.get(PROP_LEAF)
+    for ob in parts(header):
+        leaf = ob.get(PROP_LEAF)
         if leaf is None:
             continue
-        frames = plans[rig.name]
-        mats = _xp_matrices([samples[rig.name][f] for f in frames])
-        drefs = json.loads(rig.get(PROP_ANIM_DATAREFS, "[]") or "[]")
-        if len(drefs) > 1:
-            if report:
-                report({'WARNING'},
-                       "%s: driven by %d datarefs (%s); a single key table "
-                       "cannot carry both, so its animation is kept from the "
-                       "file" % (rig.name, len(drefs), ", ".join(drefs)))
-            continue
-        lines = _anim_lines(rig, frames, mats, report)
-        if lines is None:
-            # Not a hinge (two rotations about different axes composed, say a
-            # wiper arm and blade).  A flat key table cannot express that: the
-            # batch keeps the animation it came in with, see export_header.
-            continue
-        if lines and _verify_generated(context, rig, frames, lines, report):
+        lines = []
+        for entry in json.loads(ob.get(PROP_ANIM_VIS, "[]") or "[]"):
+            kind, a, b, dref = entry
+            lines.append(XA.visibility_block(kind == XA.CMD_SHOW, a, b, dref))
+        ok = True
+        for rig in leaf_rigs(ob):
+            sub = rig_lines(context, rig, report)
+            if sub is None:
+                ok = False
+                break
+            lines.extend(sub)
+        if ok and lines:
             out[int(leaf)] = lines
     return out
+
+
+def rig_lines(context, rig, report=None):
+    """The ANIM_* command(s) of one rig, or None when it cannot be expressed."""
+    frames = _key_frames(rig)
+    if frames is None:
+        frames = [1.0]
+    else:
+        frames = frames[0]
+    mats = _xp_matrices(_sample_one(context, rig, frames))
+    return _anim_lines(rig, frames, mats, report)
 
 
 def _swap_animation(template, regenerate, header, report=None):
@@ -1547,24 +1692,39 @@ def _swap_animation(template, regenerate, header, report=None):
         return template.events, None
 
     known = set(regenerate)
-    strip = set()
-    for block in anim.blocks:
-        leaves = set(leaf for leaf in anim.leaves
-                     if block in anim.leaves[leaf])
-        if leaves & known and not (leaves - known):
-            strip.add(block.index)
+    under = dict((block.index, set()) for block in anim.blocks)
+    for leaf, chain in anim.leaves.items():
+        for block in chain:
+            under[block.index].add(leaf)
 
-    usable = {}
-    for leaf in sorted(known):
-        chain = anim.leaves.get(leaf) or []
-        if chain and all(block.index in strip for block in chain):
-            usable[leaf] = regenerate[leaf]
-        elif report:
+    # A block may only be stripped when every batch inside it is regenerated --
+    # otherwise removing the block's own transform would strip the animation off
+    # a batch that is being kept.  And a batch is only regenerated when *all* of
+    # its blocks are stripped.  Those two rules feed each other (an outer block
+    # shared by everything blocks its children), so settle the fixpoint instead
+    # of guessing: getting this wrong produced a half-animated part -- the outer
+    # translation kept, the inner rotations gone.
+    usable = set(known)
+    while True:
+        strip = set(block.index for block in anim.blocks
+                    if under[block.index] <= usable)
+        dropped = set(leaf for leaf in usable
+                      if not all(block.index in strip
+                                 for block in anim.leaves.get(leaf) or []))
+        if not dropped:
+            break
+        usable -= dropped
+
+    leaf_blocks = {}
+    for leaf in usable:
+        leaf_blocks[leaf] = regenerate[leaf]
+    for leaf in sorted(known - usable):
+        if report:
             report({'WARNING'},
-                   "%s: batch %d (%s) is not a single-axis hinge; its animation "
-                   "is kept from the file and changes made in Blender to it are "
-                   "NOT written" % (header.name, leaf,
-                                    anim.leaves[leaf][-1].index))
+                   "%s: batch %d shares an ANIM block with a batch that cannot "
+                   "be regenerated; its animation is kept from the file and "
+                   "changes made in Blender to it are NOT written"
+                   % (header.name, leaf))
     if not usable:
         if report:
             report({'WARNING'}, "%s: nothing could be regenerated, the "
@@ -1582,6 +1742,7 @@ def _swap_animation(template, regenerate, header, report=None):
             drop_events.update(cmd.get("key_ev", ()))
             if "end_ev" in cmd:
                 drop_events.add(cmd["end_ev"])
+
     # an emptied ANIM_begin/ANIM_end pair is legal but pointless: drop it when
     # the block holds nothing but the batches that now carry their own block
     events = template.events
@@ -1613,7 +1774,7 @@ def _swap_animation(template, regenerate, header, report=None):
         report({'INFO'}, "%s: %d of %d animated batches written from Blender"
                % (os.path.basename(header.get(PROP_SOURCE, header.name)),
                   len(usable), len(anim.leaves)))
-    return kept, usable
+    return kept, leaf_blocks
 
 
 def export_header(context, header, filepath, uv_name=None, preserve=True,

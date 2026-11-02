@@ -69,42 +69,42 @@ def key_counts(anim, leaf):
 
 
 def compare_keys(name, header, src_anim, dst_anim):
-    """Every key table written must have exactly the keys the rig has.
+    """The keys written for a batch must be the keys its rigs carry.
 
-    That is the whole point of the time line being the dataref: three keyframes
-    in Blender must come out as three ANIM_rotate_key lines, and a two-endpoint
-    animation imported as two keyframes has to stay two.
+    One rig = one command = one key table, so the multiset of table lengths has
+    to match: a batch animated by a 2-key translate and a 2-key rotate comes out
+    as two tables of two, no matter how many datarefs that is.
     """
     written = set(json.loads(header.get("xp8_anim_written", "[]") or "[]"))
-    batches = kept = 0
-    total_src = total_rig = total_dst = 0
-    for rig in [c for c in header.children if XM.is_rig(c)]:
+    by_leaf = {}
+    for rig in XM.rigs(header):
         leaf = rig.get(XM.PROP_LEAF)
-        if leaf is None or leaf not in src_anim.leaves:
+        if leaf is None:
             continue
-        want = [len(cmd["keys"]) for block in src_anim.leaves[leaf]
-                for cmd in block.commands if "keys" in cmd]
-        if not want and not any(cmd["kind"] in (XA.CMD_ROTATE, XA.CMD_TRANS)
-                                for block in src_anim.leaves[leaf]
-                                for cmd in block.commands):
-            continue                      # visibility only: nothing to key
-        batches += 1
         keys = json.loads(rig.get(XM.PROP_ANIM_KEYS, "[]") or "[]")
-        got = key_counts(dst_anim, leaf)
-        total_src += max(want) if want else 2
-        if leaf not in written:
-            kept += 1                     # not a hinge: file animation kept
+        if keys:
+            by_leaf.setdefault(leaf, []).append(len(keys))
+    batches = kept = 0
+    total_rig = total_dst = 0
+    worst = 0
+    for leaf in sorted(by_leaf):
+        if leaf not in src_anim.leaves:
             continue
-        total_rig += len(keys)
-        if not got:
+        batches += 1
+        want = sorted(by_leaf[leaf])
+        got = key_counts(dst_anim, leaf)
+        if leaf not in written:
             kept += 1
             continue
-        total_dst += max(got)
-        check(max(got) == len(keys),
-              "%s: batch %d: %d keyframes on the rig, %d keys written back"
-              % (name, leaf, len(keys), max(got)))
-    print("  %-24s %d batches, %d kept from the file; keys: file %d, rig %d, "
-          "written %d" % (name, batches, kept, total_src, total_rig, total_dst))
+        total_rig += sum(want)
+        total_dst += sum(got)
+        worst = max(worst, max(got) if got else 0)
+        check(sorted(got) == want,
+              "%s: batch %d: rigs carry %s keys, the file got %s"
+              % (name, leaf, want, got))
+    print("  %-24s %d compound batch(es), %d kept from the file; keys on the "
+          "rigs %d -> written %d, most in one table %d"
+          % (name, batches, kept, total_rig, total_dst, worst))
 
 
 def compare_motion(name, src_anim, dst_anim):
@@ -118,9 +118,15 @@ def compare_motion(name, src_anim, dst_anim):
           "%s: %d animated batches became %d"
           % (name, len(src_leaves), len(dst_leaves)))
     worst = 0.0
+    present = set(dst_anim.datarefs())
     for position in POSITIONS:
-        a = src_anim.matrix_at(poses(src_anim, position))
-        b = dst_anim.matrix_at(poses(dst_anim, position))
+        # same *dataref values* for both files -- not "same fraction of each
+        # file's own range".  A command that animates nothing is dropped on
+        # export, which shrinks the written range without changing any pose.
+        p = poses(src_anim, position)
+        a = src_anim.matrix_at(p)
+        b = dst_anim.matrix_at(dict((d, v) for d, v in p.items()
+                                    if d in present))
         for leaf in src_leaves:
             if leaf not in b:
                 check(False, "%s: batch %d lost its animation" % (name, leaf))
@@ -152,14 +158,16 @@ def main():
     check(len(headers) == len(originals),
           "expected %d headers, got %d" % (len(originals), len(headers)))
     for src, h in sorted(headers.items()):
-        rigs = [c for c in h.children if XM.is_rig(c)]
+        rigs = XM.rigs(h)
         parts = XM.parts(h)
-        actions = [r for r in rigs if r.get(XM.PROP_ANIM_ACTION)]
-        print("  %-24s parts %3d rigs %3d actions %3d"
-              % (os.path.basename(src), len(parts), len(rigs), len(actions)))
-        check(len(rigs) == len(actions) or not rigs,
-              "%s: %d rigs but %d actions" % (os.path.basename(src),
-                                              len(rigs), len(actions)))
+        driven = [r for r in rigs if r.get(XM.PROP_DATAREF)]
+        actions = [r for r in driven if r.get(XM.PROP_ANIM_ACTION)]
+        print("  %-24s parts %3d rigs %3d (%d dataref-driven) actions %3d"
+              % (os.path.basename(src), len(parts), len(rigs), len(driven),
+                 len(actions)))
+        check(len(driven) == len(actions),
+              "%s: %d dataref-driven rigs but %d actions"
+              % (os.path.basename(src), len(driven), len(actions)))
 
     print("\n1. untouched round trip (rigs must not reach the file):")
     total_lines_in = total_lines_out = 0

@@ -648,9 +648,16 @@ class VIEW3D_PT_xplane_obj(bpy.types.Panel):
             if not (obj.get(XM.PROP_DATAREF) or "").strip():
                 abox.label(text="no dataref: nothing will be written",
                            icon='ERROR')
-            row = abox.row(align=True)
-            row.prop(obj, '["%s"]' % XM.PROP_ANIM_MIN, text="Value@1")
-            row.prop(obj, '["%s"]' % XM.PROP_ANIM_MAX, text="@101")
+            keys = _json_list(obj.get(XM.PROP_ANIM_KEYS, "[]"))
+            frames = _json_list(obj.get(XM.PROP_ANIM_FRAMES, "[]"))
+            if len(keys) > 1 and len(keys) == len(frames):
+                # imported: the values are the file's own keys, one per frame
+                abox.label(text="%d key(s): %g … %g over frames 1..%d"
+                           % (len(keys), keys[0], keys[-1], round(frames[-1])))
+            else:
+                row = abox.row(align=True)
+                row.prop(obj, '["%s"]' % XM.PROP_ANIM_MIN, text="Value@1")
+                row.prop(obj, '["%s"]' % XM.PROP_ANIM_MAX, text="@101")
             abox.operator("object.xp8_pick_dataref", icon='PRESET',
                           text="Pick a dataref from this object")
             vis = _json_list(obj.get(XM.PROP_ANIM_VIS, "[]"))
@@ -661,12 +668,11 @@ class VIEW3D_PT_xplane_obj(bpy.types.Panel):
                     box.label(text="%s %g..%g  %s" % (kind, a, b, dref))
                 box.operator("object.xp8_clear_visibility", icon='X',
                              text="Drop the show/hide rules")
-            keys = _json_list(obj.get(XM.PROP_ANIM_KEYS, "[]"))
             info = abox.column(align=True)
-            info.label(text="%d keyframe(s), frames 1..101 = the value range"
-                       % len(keys))
             if obj.get(XM.PROP_ANIM_ACTION):
                 info.label(text="action: %s" % obj[XM.PROP_ANIM_ACTION])
+            else:
+                info.label(text="static (no keyframes)")
 
         if XM.is_batch(obj):
             part = layout.box()

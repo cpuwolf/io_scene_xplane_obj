@@ -40,18 +40,21 @@ A `.obj` animation is driven by a **dataref** — a value the sim owns at run ti
 (`sim/flightmodel2/gear/deploy_ratio[0]`), not by a clock. Blender has no such
 input, so the time line *is* the dataref:
 
-* every batch inside an `ANIM_begin`/`ANIM_end` block gets a **rig Empty**
-  (`header -> rig -> mesh`) holding the transform its datarefs select. The part
-  therefore sits where the sim would draw it — gear legs down, doors open —
-  instead of piled up at the file origin, and you can edit it there;
-* the rig also gets an **Action**: frame **1 = every dataref at its lowest keyed
-  value, frame 101 = at its highest**, linear keys (which is how the file
-  interpolates). Drag the time line to watch the gear retract. The keyframes are
-  the file's own keys — a two-endpoint `ANIM_rotate` becomes two keyframes, a
-  three-key `ANIM_rotate_key` table becomes three — so the time line is as coarse
-  or as fine as the animation really is. Keys are only added where the motion
-  between them is not a straight line (two datarefs composing, a rotation about
-  two axes): there the extra keys are what makes the preview honest;
+* every batch inside an `ANIM_begin`/`ANIM_end` block gets a **chain of rig
+  Empties** (`header -> rig -> rig -> mesh`), one per transform command, holding
+  the transform its dataref selects. The part therefore sits where the sim would
+  draw it — gear legs down, doors open — instead of piled up at the file origin,
+  and you can edit it there. A compound animation (a pitch translate, then a
+  yoke-hide, then a roll rotate) is a chain, so each dataref keeps its own
+  values and its own keys instead of being squashed into one;
+* each rig also gets an **Action** with **one keyframe per key the file has**,
+  spread over frames 1..101 *by key index* — a two-endpoint `ANIM_rotate`
+  becomes two keyframes, a 15-key gauge table fifteen. Index, not dataref value:
+  real gauges key on things like `-9999, 0, 0.0126, 0.0252, …, 9999`, and a
+  value-linear time line squeezes all twenty keys into two adjacent frames where
+  they collapse into one. Linear keys, because that is how the file
+  interpolates; a rotation of more than 180° between two keys gets the one
+  intermediate key Blender needs to replay the long way round;
 * `ANIM_show`/`ANIM_hide` become **step keyframes on `hide_viewport` /
   `hide_render`** (`CONSTANT` interpolation, one key per visibility boundary),
   so scrubbing the time line makes the parts appear and disappear exactly as the
@@ -76,6 +79,9 @@ prop at 0°, and *Bake Actions* off for rigs with a static pose only).
 Rigs never reach the file — the exporter walks the parent chain, skips them, and
 uses what you set on the mesh itself — so an untouched import is still byte
 identical, and a part you *move* in Blender exports at the new position.
+
+Drag the time line to watch the gear retract, the altimeter needle sweep, the
+yoke move in pitch and roll at once.
 
 To *author* a new animation, select a batch and press **Animate Part** in the
 N-panel (category *X-Plane*): it creates the rig. Keyframe the rig's
