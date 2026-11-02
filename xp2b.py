@@ -430,6 +430,7 @@ class _Converter(object):
             self._apply_light_level(ob, state)
             self._apply_camera_state(ob, state)
             self._apply_shade_and_shiny(ob, state)
+            self._apply_surface_state(ob, state)
             if apply_manipulator(ob, state, self.warnings):
                 coll.xplane.layer.export_type = "cockpit"
             self._check_state(state, ob.name)
@@ -556,10 +557,65 @@ class _Converter(object):
                         if slot.material is not None:
                             slot.material.specular_intensity = value
 
+    def _apply_surface_state(self, ob, state):
+        """blend / shadow / poly_os -> the matching material properties.
+
+        Unambiguous one-to-one mappings only.  ATTR_hard, ATTR_cull,
+        ATTR_depth, ATTR_draped and ATTR_hud_glass are deliberately left as
+        warnings: each either needs a table we would be guessing at (ATTR_hard
+        takes a surface number) or has no XPlane2Blender field at all, and a
+        wrong guess changes how the object renders.  ATTR_draped is also
+        rejected outright by XP2B outside scenery objects ("Must not be
+        draped"), which is where that experiment ended.
+        """
+        blend = {"ATTR_blend": "on", "ATTR_no_blend": "off",
+                 "ATTR_shadow_blend": "shadow"}
+        flags = {"ATTR_shadow": ("shadow_local", True),
+                 "ATTR_no_shadow": ("shadow_local", False)}
+        for cat, raws in state or []:
+            for raw in raws:
+                words = raw.split()
+                if not words:
+                    continue
+                kw = words[0]
+                if kw in blend:
+                    self._material_set(ob, [("blend_v1000", blend[kw])], kw[:12])
+                elif kw in flags:
+                    field, value = flags[kw]
+                    self._material_set(ob, [(field, value)], kw[:12])
+                elif kw == "ATTR_poly_os" and len(words) > 1:
+                    try:
+                        value = int(float(words[1]))
+                    except ValueError:
+                        self.warn("%s: ATTR_poly_os value not a number" % ob.name)
+                        continue
+                    self._material_set(ob, [("poly_os", value)], "poly_os")
+                elif kw == "ATTR_no_poly_os":
+                    self._material_set(ob, [("poly_os", 0)], "poly_os")
+
+    def _material_set(self, ob, pairs, tag):
+        """Set material fields, cloning the material when a value would change
+
+        Two batches can share a material and disagree about a state, and a
+        material carries one value - so the second one gets its own copy.
+        """
+        for slot in ob.material_slots:
+            mat = slot.material
+            if mat is None:
+                continue
+            if any(getattr(mat.xplane, name) == value for name, value in pairs):
+                continue
+            clone = mat.copy()
+            clone.name = mat.name + "_" + tag
+            slot.material = clone
+            for name, value in pairs:
+                setattr(clone.xplane, name, value)
+
     def _check_state(self, state, name):
         # only what is really mapped - anything else has to be reported, or the
         # file comes back looking fine with a state line silently missing
-        keep = {"manip", "draw", "light_level", "camera", "shiny", "shade"}
+        keep = {"manip", "draw", "light_level", "camera", "shiny", "shade",
+                "blend", "shadow", "poly_os"}
         for cat, raws in state or []:
             if cat in keep:
                 continue
