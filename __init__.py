@@ -605,6 +605,40 @@ class OBJECT_OT_xp8_restore_visibility(bpy.types.Operator):
 
 
 # ---------------------------------------------------------------------------
+# convert to an XPlane2Blender authoring scene
+# ---------------------------------------------------------------------------
+
+@_add
+class OBJECT_OT_xp8_to_xp2b(bpy.types.Operator):
+    bl_idname = "object.xp8_to_xp2b"
+    bl_label = "Convert to XPlane2Blender scene"
+    bl_description = ("Rebuild this object as XPlane2Blender Empties (datarefs "
+                      "and keyframes) and meshes. One way: the imported command "
+                      "stream and this scene stay untouched, but the result is "
+                      "only as complete as an export from XPlane2Blender can be")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        from . import xp2b as XC
+        headers = []
+        for ob in context.selected_objects:
+            header = _find_header(ob)
+            if header is not None and header not in headers:
+                headers.append(header)
+        if not headers:
+            self.report({'ERROR'}, "select an imported OBJ8 object first")
+            return {'CANCELLED'}
+        try:
+            colls = XC.convert(context, headers, self.report)
+        except RuntimeError as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        self.report({'INFO'}, "%d file(s) converted: %s"
+                    % (len(colls), ", ".join(c.name for c in colls)))
+        return {'FINISHED'}
+
+
+# ---------------------------------------------------------------------------
 # side panel: what am I looking at
 # ---------------------------------------------------------------------------
 
@@ -636,6 +670,13 @@ class VIEW3D_PT_xplane_obj(bpy.types.Panel):
                                       "BLEND_GLASS", "NORMAL_METALNESS"):
                 col.label(text=line[:48], icon='TEXTURE'
                           if words[0].startswith("TEXTURE") else 'DOT')
+
+        xbox = layout.box()
+        xbox.label(text="author with XPlane2Blender", icon='MODIFIER')
+        xbox.operator("object.xp8_to_xp2b", icon='DUPLICATE')
+        if header.get("xp2b_convert_warnings"):
+            xbox.label(text="last conversion had warnings (hover the button)",
+                       icon='ERROR')
 
         if XM.is_rig(obj):
             abox = layout.box()
