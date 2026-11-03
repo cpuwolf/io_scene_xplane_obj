@@ -1,0 +1,60 @@
+I
+800
+OBJ
+
+# Fixture for the nested-animation tests: the same three shapes the importer
+# has to tell apart.
+#   1. three static triangles (no ANIM block at all)
+#   2. one batch inside a *single* block with a static pivot + a keyed rotate:
+#      two transform commands around one batch = a nested animation
+#   3. one batch inside two nested blocks, one dataref each: a real cascade
+#   4. one batch with one keyed rotate: a hinge, which stays an Empty rig
+TEXTURE	mini.png
+POINT_COUNTS	18 0 0 18
+
+VT	0	0	0	0	1	0	0.00	0.00
+VT	1	0	0	0	1	0	0.30	0.30
+VT	2	0	0	0	1	0	0.60	0.60
+VT	0	0	0	0	1	0	0.00	0.00
+VT	1	0	0	0	1	0	0.30	0.30
+VT	2	0	0	0	1	0	0.60	0.60
+VT	0	0	1	0	1	0	0.00	0.00
+VT	1	0	1	0	1	0	0.30	0.30
+VT	2	0	1	0	1	0	0.60	0.60
+VT	0	0	1	0	1	0	0.00	0.00
+VT	1	0	1	0	1	0	0.30	0.30
+VT	2	0	1	0	1	0	0.60	0.60
+VT	0	0	2	0	1	0	0.00	0.00
+VT	1	0	2	0	1	0	0.30	0.30
+VT	2	0	2	0	1	0	0.60	0.60
+VT	0	0	2	0	1	0	0.00	0.00
+VT	1	0	2	0	1	0	0.30	0.30
+VT	2	0	2	0	1	0	0.60	0.60
+IDX10	0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17
+
+TRIS	0	9
+ANIM_begin
+	ANIM_trans	1	0	0	1	0	0	0	0	no_ref
+	ANIM_rotate_begin	0	1	0	sim/flightmodel2/gear/deploy_ratio
+	ANIM_rotate_key	0	0
+	ANIM_rotate_key	1	90
+	ANIM_rotate_end
+	TRIS	9	3
+ANIM_end
+ANIM_begin
+	ANIM_rotate_begin	0	0	1	sim/flightmodel2/controls/yoke_pitch_ratio
+	ANIM_rotate_key	-1	-20
+	ANIM_rotate_key	1	20
+	ANIM_rotate_end
+	ANIM_begin
+		ANIM_trans_begin	sim/flightmodel2/controls/yoke_roll_ratio
+		ANIM_trans_key	-1	-0.1	0	0
+		ANIM_trans_key	1	0.1	0	0
+		ANIM_trans_end
+		TRIS	12	3
+	ANIM_end
+ANIM_end
+ANIM_begin
+	ANIM_rotate	0	0	1	0	45	0	1	sim/flightmodel2/misc/door_open_ratio
+	TRIS	15	3
+ANIM_end
