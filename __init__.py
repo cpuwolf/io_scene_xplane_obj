@@ -470,6 +470,11 @@ def dataref_candidates(header):
         dref = (rig.get(XM.PROP_DATAREF) or "").strip()
         if dref and dref not in out:
             out.append(dref)
+    for arm in [c for c in header.children if XM.is_armature(c)]:
+        for entry in XM.bone_commands(arm):
+            dref = (entry.get("dataref") or "").strip()
+            if dref and dref not in out:
+                out.append(dref)
     for kind, line in _json_list(header.get(XM.PROP_EVENTS, "[]")):
         if kind != "R" or not line:
             continue
@@ -716,6 +721,26 @@ class VIEW3D_PT_xplane_obj(bpy.types.Panel):
             else:
                 info.label(text="static (no keyframes)")
 
+        if XM.is_armature(obj):
+            bbox = layout.box()
+            bbox.label(text="nested animation rig", icon='ARMATURE_DATA')
+            entries = XM.bone_commands(obj)
+            bbox.label(text="%d bone(s), one per transform command"
+                       % len(obj.data.bones))
+            if not entries:
+                bbox.label(text="no keyframes: static pose", icon='INFO')
+            for entry in entries[:12]:
+                dref = entry.get("dataref") or "-"
+                bbox.label(text="%s  %s  %s"
+                           % (entry.get("bone", "?"), entry.get("kind", ""),
+                              dref[:34]))
+            if len(entries) > 12:
+                bbox.label(text="... %d more" % (len(entries) - 12))
+            if obj.get(XM.PROP_ANIM_ACTION):
+                bbox.label(text="action: %s" % obj[XM.PROP_ANIM_ACTION])
+            bbox.label(text="preview only: the file's animation is written back",
+                       icon='INFO')
+
         if XM.is_batch(obj):
             part = layout.box()
             part.label(text="%s  (command %s)"
@@ -725,8 +750,14 @@ class VIEW3D_PT_xplane_obj(bpy.types.Panel):
             info.label(text="vertices: %d" % len(obj.data.vertices))
             if obj.data.materials:
                 info.label(text="material: %s" % obj.data.materials[0].name)
+            arm = XM.armature_of(obj)
             if XM.is_rig(obj.parent):
                 info.label(text="rig: %s" % obj.parent.name, icon='ARMATURE_DATA')
+            elif arm is not None:
+                info.label(text="bone: %s / %d"
+                           % (obj.parent_bone, len(arm.data.bones)),
+                           icon='BONE_DATA')
+                info.label(text="rig: %s" % arm.name)
             else:
                 info.operator("object.xp8_anim_rig", icon='ADD')
 

@@ -47,6 +47,15 @@ input, so the time line *is* the dataref:
   and you can edit it there. A compound animation (a pitch translate, then a
   yoke-hide, then a roll rotate) is a chain, so each dataref keeps its own
   values and its own keys instead of being squashed into one;
+* **a cascade becomes a bone chain.** Two or more transform commands around one
+  batch (a yoke that slides in pitch and then swings in roll, a gear leg that
+  folds and steers) is not a hinge, it is a hierarchy, so it is imported as an
+  **armature with one bone per command**, parented in the order the file
+  multiplies them, bones carrying the dataref properties and the Action, and the
+  batch bone-parented to the innermost bone. One command keeps its Empty — a
+  hinge does not need a rig. OBJ8 has no skinning, so **no Armature modifier is
+  added**: the bones move the batch, the vertices stay the file's own, and an
+  untouched round trip is still byte identical;
 * each rig also gets an **Action** with **one keyframe per key the file has**,
   **key N on frame N** — a two-endpoint `ANIM_rotate` becomes two keyframes,
   a 15-key gauge table fifteen. That is XPlane2Blender's convention too (its
@@ -212,7 +221,7 @@ exportable collection next to it:
 
 | in the file | in the XPlane2Blender collection |
 |---|---|
-| `ANIM_begin/end` nesting | a chain of Empties |
+| `ANIM_begin/end` nesting | a chain of Empties, or a bone chain when the subtree is a pure dataref cascade (see below) |
 | `ANIM_trans_begin` + keys | an Empty with a `transform` dataref and one location key per file key |
 | `ANIM_rotate_begin` + keys | an Empty with `rotation_mode = AXIS_ANGLE` (the file's axis, verbatim) |
 | static `ANIM_trans` / `ANIM_rotate` | plain Empty transforms |
@@ -226,6 +235,20 @@ The conversion is lossy in a known way and says so: `LIGHT_*` primitives,
 `ATTR_LOD`, `IF/ENDIF` and `MAGNET` cannot be handed to XPlane2Blender as
 commands, so they are dropped with a warning per file (the counts are also
 stored on the new collection as `xp2b_convert_warnings`).
+
+**When the bridge builds bones, and when it does not.** A bone chain needs the
+same two transform commands the importer asks for, *and* a subtree that
+XPlane2Blender can carry exactly: no `ANIM_show/hide` (XP2B writes those for an
+object, and an object's dataref can only reach geometry parented under it — a
+bone's children are bones) and no static pivot (XP2B folds a bone's
+non-animated pose into the child's bake, and on Laminar's MD-82 `gear_main.obj`
+that put 96 batches 1.5 m from where the file draws them).  Everything else
+keeps the Empty chain, which XP2B handles exactly, and the conversion says how
+many batches went each way.  Where a bone chain *is* built the exported motion
+matches the file to the millimetre, with one measured exception: a linkage whose
+whole range is a few hundredths of a degree has no stable rotation axis once XP2B
+re-derives it from the pose matrix, and comes back flattened (0.07 m on that
+cockpit's throttle linkage).
 
 Measured on Laminar's C90B exterior: `ANIM_*`/`ATTR_*` text comes out
 line-for-line identical apart from 1e-4-level float rounding, triangle counts
@@ -247,6 +270,11 @@ same composition order, same result.
   with the first material's textures.
 * Blender stores custom normals as int16 per axis, so regenerated normals can
   differ from the source by ~1e-4. Positions and UVs round-trip exactly.
+* A bone-rigged batch is **preview**: *From Blender (rigs)* samples the rig
+  Empties, one key table each, so a cascade that lives on a bone chain keeps the
+  animation the file came in with instead of being re-keyed from Blender. The
+  export says how many batches that was. Editing such a part's geometry still
+  exports; editing its motion needs the `ANIM_*` text in `xp8_events`.
 
 ## Development
 
@@ -260,6 +288,8 @@ python3 verify/test_anim.py                        # ANIM_* evaluator, no Blende
 blender -b --factory-startup --python verify/roundtrip_blender.py -- verify/fixtures
 blender -b --factory-startup --python verify/anim_roundtrip.py -- verify/fixtures
 blender -b --factory-startup --python verify/check_selection.py   # export = selection
+blender -b --factory-startup --python verify/check_bones.py -- <file.obj>       # nested animation -> bones
+blender -b --factory-startup --python verify/check_bones_xp2b.py -- <file.obj>  # ... and out through XP2B
 
 # stronger: run the same tests against a real aircraft
 blender -b --factory-startup --python verify/roundtrip_blender.py -- \
