@@ -150,6 +150,7 @@ class IMPORT_OT_xplane_obj(bpy.types.Operator, ImportHelper):
 
         made = 0
         tri_count = 0
+        headers = []
         for p in paths:
             try:
                 header = XM.import_file(context, p, into_collection=coll,
@@ -164,6 +165,7 @@ class IMPORT_OT_xplane_obj(bpy.types.Operator, ImportHelper):
             if header is None:
                 continue
             made += 1
+            headers.append(header)
             for part in XM.parts(header):
                 if part.type == 'MESH' and part.get(XM.PROP_ROLE) == XM.ROLE_TRIS:
                     tri_count += len(part.data.loop_triangles) or (
@@ -176,7 +178,35 @@ class IMPORT_OT_xplane_obj(bpy.types.Operator, ImportHelper):
             return {'CANCELLED'}
         self.report({'INFO'}, "imported %d file(s), %d triangles"
                     % (made, tri_count))
+        self._build_xp2b(context, headers)
         return {'FINISHED'}
+
+    def _build_xp2b(self, context, headers):
+        """The authoring scene XPlane2Blender's exporter reads.
+
+        Its export operator only writes collections marked exportable, and this
+        importer builds none - so without this step File > Export > X-Plane
+        Object (.obj) stops with "Could not find any Exportable Collections".
+        That is why it is not optional: the exported scene *is* this add-on's
+        output.
+        """
+        from . import xp2b as XC
+
+        if not XC.available():
+            self.report({'ERROR'},
+                        "XPlane2Blender is not installed/enabled: the file was "
+                        "imported, but there is no exportable collection for "
+                        "its exporter to write. Install XPlane2Blender and "
+                        "import again")
+            return
+        try:
+            colls = XC.convert(context, headers, self.report)
+        except Exception as exc:                          # noqa: BLE001
+            self.report({'ERROR'},
+                        "could not build the XPlane2Blender scene: %s" % exc)
+            return
+        self.report({'INFO'}, "ready to export with XPlane2Blender: %s"
+                    % ", ".join(c.name for c in colls))
 
 
 # ---------------------------------------------------------------------------

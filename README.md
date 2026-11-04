@@ -1,17 +1,26 @@
-# X-Plane OBJ8 Object — Blender importer/exporter
+# X-Plane OBJ8 Object — XPlane2Blender's OBJ8 importer
 
-Import and export [X-Plane OBJ8](https://developer.x-plane.com/article/obj8-file-format-specification/)
-`.obj` objects with their textures, edit them in Blender, and get a `.obj` back
-that X-Plane still loads — animations, manipulators and lights included.
+Import [X-Plane OBJ8](https://developer.x-plane.com/article/obj8-file-format-specification/)
+`.obj` objects into a Blender scene that [XPlane2Blender](https://github.com/XPlane2Blender/XPlane2Blender)
+writes back out — animations, manipulators and lights included.
+
+The import builds the authoring collection itself (see *Handing the scene to
+XPlane2Blender*), so **File > Import > X-Plane OBJ8** and then **File > Export >
+X-Plane Object (.obj)** is the whole workflow: there is no convert step to
+remember, and nothing to set up per file.
 
 ## Install
 
 From [extensions.blender.org](https://extensions.blender.org/add-ons/io_scene_xplane_obj/)
 (Preferences > Get Extensions > search "X-Plane OBJ8"), or drag the release
-`io_scene_xplane_obj-<version>.zip` into Blender. Requires Blender 4.2 or newer.
+`io_scene_xplane_obj-<version>.zip` into Blender. Requires Blender 4.2 or newer,
+and [XPlane2Blender](https://extensions.blender.org/add-ons/io_scene_xplane2blender/)
+installed — the export side is its operator.
 
-Menu: **File > Import > X-Plane OBJ8 (.obj)**, **File > Export > X-Plane OBJ8 (.obj)**.
-Tick "Import whole folder" to bring in an aircraft's `objects/` directory at once.
+Menu: **File > Import > X-Plane OBJ8 (.obj)**. Tick "Import whole folder" to
+bring in an aircraft's `objects/` directory at once. The export side is
+XPlane2Blender's own **File > Export > X-Plane Object (.obj)**; this add-on no
+longer needs one of its own.
 
 ## What it does
 
@@ -26,7 +35,10 @@ Tick "Import whole folder" to bring in an aircraft's `objects/` directory at onc
 * the command stream (`ANIM_*`, `ATTR_*`, `LIGHT_*`, `ATTR_LOD`, `IF`/`ENDIF`,
   …) is kept verbatim on the header Empty and replayed around the regenerated
   geometry, so moving a vertex does **not** delete the aircraft's door animation;
-* a file you did not touch is written back **byte for byte**;
+* the imported scene keeps the file *as text*, so a scene you did not touch is
+  written back **byte for byte** by the standalone exporter described further
+  down — the XPlane2Blender path rewrites the geometry instead, because it works
+  from the object tree and not from a command stream;
 * tri / line / light counts and `POINT_COUNTS` are recomputed from what was
   actually written, and `TRIS`/`LINES` offsets are rebuilt with the index table.
 
@@ -131,6 +143,11 @@ console — an edit made to them in Blender is not written.
 
 ## Export writes the selection
 
+> **Legacy path.** Everything from here to *Where the X-Plane data lives* is the
+> add-on's own exporter. The supported export path is XPlane2Blender's, and the
+> import has already rebuilt the scene for it; keep reading only if you want the
+> standalone writer (byte-identical write-back, or a `.patch.obj` for Ortho4XP).
+
 **File > Export > X-Plane OBJ8** writes what is selected, nothing else:
 
 | selection | what the file gets |
@@ -218,9 +235,10 @@ is byte-identical.  XPlane2Blender works the other way round - it rebuilds every
 is the wrong tool for that job.
 
 What it *is* the right tool for is authoring: manipulators, new animations,
-lights, LODs.  `object.xp8_to_xp2b` (panel button: *author with XPlane2Blender*)
-is the one-way bridge.  With an imported object selected it builds a new
-exportable collection next to it:
+lights, LODs.  The import runs the one-way bridge (`object.xp8_to_xp2b`, also on
+the N-panel as *author with XPlane2Blender*) as its last step, so the exportable
+collection exists the moment the file lands.  It builds it next to the imported
+objects:
 
 | in the file | in the XPlane2Blender collection |
 |---|---|
@@ -233,7 +251,11 @@ exportable collection next to it:
 | `ATTR_light_level` | the material's light-level fields |
 | `ATTR_manip_*` | `object.xplane.manip` (command family, toggle, push, radio, delta/wrap, drag axis) |
 
-The imported scene is left untouched, so the lossless path stays available.
+The bridge does not copy the scene: it re-parents the imported meshes onto its
+own armature and swaps in `_nodraw` / `_cam` material clones, so after an import
+the scene belongs to XPlane2Blender and the standalone exporter no longer
+reproduces the file.  That is the trade this path makes — the byte-identical
+write-back is an *import-time* capability, not something to do afterwards.
 The conversion is lossy in a known way and says so: `LIGHT_*` primitives,
 `ATTR_LOD`, `IF/ENDIF` and `MAGNET` cannot be handed to XPlane2Blender as
 commands, so they are dropped with a warning per file (the counts are also

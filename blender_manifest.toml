@@ -8,7 +8,7 @@ schema_version = "1.0.0"
 id = "io_scene_xplane_obj"
 version = "0.1.4"
 name = "X-Plane OBJ8 Object"
-tagline = "Import and export X-Plane .obj objects with textures"
+tagline = "Import X-Plane .obj (OBJ8) into a scene XPlane2Blender exports"
 maintainer = "Wei Shuai"
 type = "add-on"
 
