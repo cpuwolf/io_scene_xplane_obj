@@ -427,7 +427,7 @@ def _snapshot(state, order):
         if cat not in seen and cat != "detent_range":
             out.append([cat, list(state[cat])])
             seen.add(cat)
-    if "detent_range" in state:
+    if "detent_range" in state and "detent_range" not in seen:
         out.append(["detent_range", list(state["detent_range"])])
     return out
 

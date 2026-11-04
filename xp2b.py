@@ -173,6 +173,189 @@ def _tail(words, start):
     return " ".join(words[start:])
 
 
+#: X-Plane writes a clamped end of a curve as a key at +-999; that is not a
+#: value the dataref takes, so anything compared against a manipulator's range
+#: has to skip it.
+CLAMP_VALUE = 999.0
+
+
+def _non_clamping(values):
+    kept = [v for v in values if abs(v) < CLAMP_VALUE]
+    return kept or [float(v) for v in values]
+
+
+def _detent_ranges(state):
+    """The ATTR_axis_detent_range lines of a batch, as (start, end, height)."""
+    out = []
+    for cat, raws in state or []:
+        if cat != "detent_range":
+            continue
+        for raw in raws:
+            words = raw.split()
+            if not words or words[0] != "ATTR_axis_detent_range":
+                continue
+            try:
+                out.append(tuple(float(w) for w in words[1:4]))
+            except ValueError:
+                continue
+    return out
+
+
+def _ranges_tile(ranges, v1_min, v1_max):
+    """XPlane2Blender requires the detent ranges to tile v1_min..v1_max.
+
+    Gapless, ascending, and the outer ends equal to the manipulator's own value
+    range: a table that does not cover the range makes the export fail
+    ("must tile the range of the manipulator"), so this is checked before the
+    manipulator is handed over.
+    """
+    if not ranges:
+        return False
+    rows = sorted(ranges)
+    if any(start > end for start, end, _h in rows):
+        return False
+    if abs(rows[0][0] - v1_min) > 1e-3 or abs(rows[-1][1] - v1_max) > 1e-3:
+        return False
+    for (_s1, e1, _h1), (s2, _e2, _h2) in zip(rows, rows[1:]):
+        if abs(e1 - s2) > 1e-3:
+            return False
+    return True
+
+
+def _vector(axis, angle):
+    return tuple(axis[i] * angle for i in range(3))
+
+
+def _same_pair(a, b, tol=0.02):
+    """Two sets of two rotation vectors, equal up to which end is which.
+
+    XP2B sorts the key table ascending, so the exported manipulator may list
+    the ends in the other order; comparing the (axis * angle) vectors
+    themselves also absorbs a flipped axis, which is how the files express a
+    negative sweep.
+    """
+    first, second = list(a), list(b)
+    for cand in first:
+        hit = None
+        for other in second:
+            if all(abs(cand[i] - other[i]) <= tol for i in range(3)):
+                hit = other
+                break
+        if hit is None:
+            return False
+        second.remove(hit)
+    return True
+
+
+def _apply_drag_rotate(manip, state, args, warnings, rig):
+    """ATTR_manip_drag_rotate -> XP2B's drag_rotate / drag_rotate_detent.
+
+    The file writes the pivot, the rotation axis, both angle ends, the detent
+    lift and both value ranges; XPlane2Blender derives every one of those from
+    the bones and writes them back, so what is copied is the cursor, the two
+    datarefs and the tooltip.  Whether it can be handed over at all depends on
+    the rig - `rig` is what the bone chain above this batch offers, as
+    ``(rotation dataref, detent dataref or None)``.
+
+    When the rig does not offer the bones XP2B looks for, the manipulator is
+    left off and the reason is reported: handing it over anyway makes XP2B
+    abort the whole export ("Requirements for Drag Rotate manipulator ... are
+    not met"), and a missing manipulator can be fixed by hand while a file that
+    stopped exporting cannot.
+    """
+    try:
+        cursor = _cursor(args[0])
+        v1_min, v1_max = float(args[10]), float(args[11])
+        dataref1, dataref2 = args[14], args[15]
+        tooltip = _tail(args, 16)
+    except (IndexError, ValueError):
+        warnings.append("ATTR_manip_drag_rotate: could not parse its arguments")
+        return False
+
+    if rig is None:
+        warnings.append(
+            "ATTR_manip_drag_rotate is not converted: XPlane2Blender takes the "
+            "pivot, axis and angle ends from a rotation bone above the mesh, "
+            "and this batch has none (the rotation is in a sibling block)")
+        return False
+
+    values, angles, axis, lift = rig
+    v_lo, v_hi = min(v1_min, v1_max), max(v1_min, v1_max)
+    if abs(values[0] - v_lo) > 1e-3 or abs(values[1] - v_hi) > 1e-3:
+        warnings.append(
+            "ATTR_manip_drag_rotate is not converted: its value range is "
+            "%.3f..%.3f but the bone above the mesh is keyed %.3f..%.3f; "
+            "XPlane2Blender writes those keys back as the manipulator's range"
+            % (v1_min, v1_max, values[0], values[1]))
+        return False
+    mine = [_vector((float(args[4]), float(args[5]), float(args[6])), a)
+            for a in (float(args[7]), float(args[8]))]
+    theirs = [_vector(axis, a) for a in angles]
+    if not _same_pair(mine, theirs):
+        warnings.append(
+            "ATTR_manip_drag_rotate is not converted: it sweeps %s degrees about "
+            "%s but the bone above the mesh sweeps %s about %s; XPlane2Blender "
+            "writes the bone's rotation back"
+            % ("/".join("%.3f" % a for a in (float(args[7]), float(args[8]))),
+               "/".join("%.3f" % v for v in (float(args[4]), float(args[5]),
+                                             float(args[6]))),
+               "/".join("%.3f" % a for a in angles),
+               "/".join("%.3f" % v for v in axis)))
+        return False
+
+    ranges = _detent_ranges(state)
+    if lift is None:
+        if dataref2 != "none":
+            warnings.append(
+                "ATTR_manip_drag_rotate is not converted: the file names detent "
+                "dataref %s but no detent bone sits under the rotation, so "
+                "XPlane2Blender cannot express the lift" % dataref2)
+            return False
+        if ranges:
+            warnings.append(
+                "%s: %d ATTR_axis_detent_range line(s) dropped - the rotation "
+                "has no detent bone, and XPlane2Blender writes ranges only for "
+                "the detent variants" % (manip.id_data.name, len(ranges)))
+        manip.type = "drag_rotate"
+    else:
+        if dataref2 == "none":
+            warnings.append(
+                "ATTR_manip_drag_rotate is not converted: the bones under the "
+                "rotation lift %.4f but the file names no detent dataref, so "
+                "XPlane2Blender would write a lift the file did not ask for"
+                % lift)
+            return False
+        if abs(lift - float(args[9])) > 1e-3:
+            warnings.append(
+                "ATTR_manip_drag_rotate is not converted: its detent lift is "
+                "%.4f but the bone under the rotation lifts %.4f; XPlane2Blender "
+                "writes the bone's lift back" % (float(args[9]), lift))
+            return False
+        if not _ranges_tile(ranges, v1_min, v1_max):
+            warnings.append(
+                "ATTR_manip_drag_rotate is not converted: XPlane2Blender needs "
+                "ATTR_axis_detent_range lines that tile %.3f..%.3f gaplessly, "
+                "this batch has %d" % (v1_min, v1_max, len(ranges)))
+            return False
+        # XP2B also refuses a detent whose height is taller than the bone can
+        # lift ("Height ... must be between 0.0 and the maximum lift height"),
+        # and that check runs during export - which cancels the whole file.
+        tall = [r for r in ranges if r[2] < -1e-4 or r[2] > lift + 1e-4]
+        if tall:
+            warnings.append(
+                "ATTR_manip_drag_rotate is not converted: %d ATTR_axis_detent_range "
+                "height(s) reach %.3f but the bone under the rotation only lifts "
+                "%.4f, which XPlane2Blender rejects at export time"
+                % (len(tall), max(r[2] for r in tall), lift))
+            return False
+        manip.type = "drag_rotate_detent"
+    manip.cursor = cursor
+    manip.dataref1 = dataref1
+    manip.dataref2 = dataref2
+    manip.tooltip = tooltip
+    return True
+
+
 def _cursor(value):
     value = (value or "hand").lower()
     return {
@@ -183,8 +366,14 @@ def _cursor(value):
     }.get(value, "hand")
 
 
-def apply_manipulator(ob, state, warnings):
-    """Map one ATTR_manip_* line onto object.xplane.manip. False if unhandled."""
+def apply_manipulator(ob, state, warnings, rig=None):
+    """Map one ATTR_manip_* line onto object.xplane.manip. False if unhandled.
+
+    `rig` is what the bone chain above this batch can give XPlane2Blender, for
+    the types that are derived from bones instead of from the line (see
+    ``_apply_drag_rotate``).  None means "nothing known" - such a manipulator
+    stays unconverted rather than aborting the export.
+    """
     words = _manip_line(state)
     if words is None:
         return False
@@ -273,6 +462,8 @@ def apply_manipulator(ob, state, warnings):
             manip.dataref2 = args[8]
             manip.tooltip = _tail(args, 9)
             return True
+        if kw == "ATTR_manip_drag_rotate":
+            return _apply_drag_rotate(manip, state, args, warnings, rig)
         if kw == "ATTR_manip_toggle":
             manip.type = "toggle"
             manip.cursor = _cursor(args[0])
@@ -331,6 +522,7 @@ class _Converter(object):
         self.material_cache = {}    # (material, values) -> the one clone sharing them
         self.root = None            # the Empty the whole rig hangs off
         self.visibility_placed = 0   # ANIM_show/hide rules put on bones
+        self.light_level_dropped = []  # batches whose override a panel cannot keep
 
     # -- helpers ----------------------------------------------------------
     def warn(self, msg):
@@ -637,7 +829,8 @@ class _Converter(object):
             self._apply_shade_and_shiny(ob, state)
             self._apply_surface_state(ob, state)
             self._apply_cockpit_state(ob, state, coll)
-            if apply_manipulator(ob, state, self.warnings):
+            if apply_manipulator(ob, state, self.warnings,
+                                 rig=self._drag_rig(leaf_index)):
                 coll.xplane.layer.export_type = "cockpit"
             self._apply_detent_ranges(ob, state)
             self._apply_manip_wheel(ob, state)
@@ -647,11 +840,23 @@ class _Converter(object):
         if not made:
             self.warn("%s: no geometry was moved" % base)
 
+        if self.light_level_dropped:
+            names = self.light_level_dropped
+            shown = ", ".join(names[:8]) + (" and %d more" % (len(names) - 8)
+                                           if len(names) > 8 else "")
+            self.warn("%d batch(es) lost their ATTR_light_level (%s): "
+                      "XPlane2Blender refuses a cockpit-panel material that also "
+                      "overrides the light level, and a panel batch's brightness "
+                      "comes from the panel texture anyway"
+                      % (len(names), shown))
+
         if self.specs:
-            self.warn("%d bone(s) in one armature under %s; %d ANIM_show/hide "
-                      "rule(s) ride on bones instead of on the batches"
-                      % (len(self.specs), self.root.name,
-                         self.visibility_placed))
+            # not a loss: the rig is one bone per block by design, and XP2B
+            # writes a bone's show/hide inside that bone's own ANIM_begin, so
+            # the exported block structure stays 1:1 with the file
+            coll["xp2b_rig"] = ("%d bone(s) under %s; %d ANIM_show/hide rule(s) "
+                                "on bones" % (len(self.specs), self.root.name,
+                                              self.visibility_placed))
         return coll
 
     def _report_dropped_commands(self, obj8):
@@ -782,6 +987,67 @@ class _Converter(object):
                 elif kw == "ATTR_no_poly_os":
                     self._material_set(ob, [("poly_os", 0)], "poly_os")
 
+    def _drag_rig(self, leaf_index):
+        """What a drag_rotate manipulator can take from this batch's bones.
+
+        XPlane2Blender derives a drag_rotate's pivot, axis, both angle ends and
+        the detent lift from the mesh's ancestor bones: it walks up to the first
+        animated bone and wants it to rotate only, and for the detent variant a
+        bone that translates only underneath the rotation.  The rig is one bone
+        per transform command, so the file's own block chain answers whether
+        those bones exist - a block carrying two keyed transforms becomes one
+        bone with two animations, which fits neither type.
+
+        Returns ``(value range, end angles, lift)`` for the rotation the chain
+        provides - lift is None when there is no detent bone - or None when the
+        chain does not line up with what XP2B looks for.  The numbers are what
+        XP2B writes back verbatim, so they are the thing a caller has to compare
+        against the manipulator line; the datarefs are the file's own and are
+        copied from the line, not from here.
+        """
+        rotate = detent = None
+        for block in reversed(self.anim.leaves.get(leaf_index) or []):
+            keyed = [cmd for cmd in block.commands
+                     if cmd.get("dataref")
+                     and cmd["kind"] in (XA.CMD_ROTATE, XA.CMD_ROTATE_KEYS,
+                                         XA.CMD_TRANS, XA.CMD_TRANS_KEYS)]
+            if not keyed:
+                continue
+            if len(keyed) > 1:
+                return None
+            cmd = keyed[0]
+            rotates = cmd["kind"] in (XA.CMD_ROTATE, XA.CMD_ROTATE_KEYS)
+            if rotate is None and detent is None:
+                if rotates:
+                    rotate = cmd
+                    break
+                detent = cmd        # the rotation must be a bone above this one
+                continue
+            if not rotates:
+                return None
+            rotate = cmd
+            break
+        if rotate is None or (detent is not None and not detent.get("dataref")):
+            return None
+
+        values = _non_clamping(XM.command_values(rotate))
+        if len(values) < 2:
+            return None
+        v_lo, v_hi = min(values), max(values)
+        angles = (XM._angle_at(rotate, v_lo), XM._angle_at(rotate, v_hi))
+        axis = rotate.get("axis") or (0.0, 1.0, 0.0)
+        lift = None
+        if detent is not None:
+            dv = _non_clamping(XM.command_values(detent))
+            if len(dv) < 2:
+                return None
+            pose_lo = {detent["dataref"]: min(dv)}
+            pose_hi = {detent["dataref"]: max(dv)}
+            lo = XA.cmd_matrix(detent, pose_lo)
+            hi = XA.cmd_matrix(detent, pose_hi)
+            lift = math.sqrt(sum((hi[i][3] - lo[i][3]) ** 2 for i in range(3)))
+        return ((v_lo, v_hi), tuple(angles), tuple(axis), lift)
+
     def _apply_manip_wheel(self, ob, state):
         """ATTR_manip_wheel <delta> -> the manipulator's mouse-wheel rate.
 
@@ -892,9 +1158,7 @@ class _Converter(object):
         # comes from the panel texture, the override has no meaning there.
         for slot in ob.material_slots:
             if slot.material is not None and slot.material.xplane.lightLevel:
-                self.warn("%s: ATTR_light_level dropped - the batch draws into "
-                          "the cockpit panel, and XPlane2Blender rejects a panel "
-                          "material with a light-level override" % ob.name)
+                self.light_level_dropped.append(ob.name)
                 break
         pairs = [("cockpit_feature", "panel"), ("lightLevel", False)]
         if region is not None:
