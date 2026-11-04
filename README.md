@@ -32,6 +32,10 @@ bring in an aircraft's `objects/` directory at once. The export side is
 XPlane2Blender's own **File > Export > X-Plane Object (.obj)**; this add-on no
 longer needs one of its own.
 
+Dragging an `.obj` from Finder/Explorer onto the 3D Viewport (or onto the
+View Layer outliner) imports it too — one file or a multi-selection — because
+the add-on registers a file handler for `.obj`.
+
 ## What it does
 
 * the import lands **as** the XPlane2Blender collection — one collection, one

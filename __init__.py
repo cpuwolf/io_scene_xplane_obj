@@ -63,9 +63,10 @@ import glob
 import json
 
 import bpy
-from bpy.props import (BoolProperty, EnumProperty, FloatProperty,
-                       StringProperty)
-from bpy_extras.io_utils import ExportHelper, ImportHelper
+from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
+                       FloatProperty, StringProperty)
+from bpy_extras.io_utils import (ExportHelper, ImportHelper,
+                                 poll_file_object_drop)
 
 from . import objcodec as OC
 from . import xpanim as XA
@@ -93,24 +94,60 @@ class IMPORT_OT_xplane_obj(bpy.types.Operator, ImportHelper):
     filename_ext = ".obj"
     filter_glob: StringProperty(default="*.obj", options={'HIDDEN'})
 
+    # SKIP_SAVE on filepath matters: without it the path from the previous
+    # import stays on the operator and `invoke` (below) would re-import that
+    # file instead of opening the file browser.
+    filepath: StringProperty(
+        name="File Path",
+        description="Filepath used for importing the file",
+        maxlen=1024, subtype='FILE_PATH', options={'SKIP_SAVE'})
+    directory: StringProperty(
+        subtype='DIR_PATH', options={'SKIP_SAVE', 'HIDDEN'})
+    files: CollectionProperty(
+        name="File Path", type=bpy.types.OperatorFileListElement,
+        options={'SKIP_SAVE', 'HIDDEN'})
+
     import_folder: BoolProperty(
         name="Import whole folder",
         description="Import every .obj sitting next to the selected file",
         default=False)
 
-    def execute(self, context):
-        path = self.filepath
-        if not os.path.isfile(path):
-            self.report({'ERROR'}, "not a file: %s" % path)
-            return {'CANCELLED'}
+    def invoke(self, context, event):
+        """A dropped file arrives with `filepath` (or `files`) already set.
 
-        paths = [path]
-        if self.import_folder:
-            folder = os.path.dirname(path)
-            paths = sorted(glob.glob(os.path.join(folder, "*.obj")))
+        Blender's file handler calls the operator with INVOKE_DEFAULT, and
+        ImportHelper.invoke would open the file browser on top of the drop -
+        so hand a pre-set path straight to execute().
+        """
+        if self.properties.is_property_set("filepath") or len(self.files):
+            return self.execute(context)
+        context.window_manager.fileselect_add(self)
+        return {'RUNNING_MODAL'}
+
+    def execute(self, context):
+        if len(self.files):
+            # drag and drop of a multi-selection: import exactly what landed,
+            # never "the whole folder" (that is the menu dialog's option).
+            base = self.directory
+            paths = [os.path.join(base, f.name) for f in self.files
+                     if f.name.lower().endswith(".obj")]
+            paths.sort()
             if not paths:
-                self.report({'ERROR'}, "no .obj in %s" % folder)
+                self.report({'ERROR'}, "no .obj in the dropped files")
                 return {'CANCELLED'}
+        else:
+            path = self.filepath
+            if not os.path.isfile(path):
+                self.report({'ERROR'}, "not a file: %s" % path)
+                return {'CANCELLED'}
+
+            paths = [path]
+            if self.import_folder:
+                folder = os.path.dirname(path)
+                paths = sorted(glob.glob(os.path.join(folder, "*.obj")))
+                if not paths:
+                    self.report({'ERROR'}, "no .obj in %s" % folder)
+                    return {'CANCELLED'}
 
         coll = None
         if len(paths) > 1:
@@ -175,6 +212,29 @@ class IMPORT_OT_xplane_obj(bpy.types.Operator, ImportHelper):
             return
         self.report({'INFO'}, "ready to export with XPlane2Blender: %s"
                     % ", ".join(c.name for c in colls))
+
+
+# ---------------------------------------------------------------------------
+# drag and drop
+# ---------------------------------------------------------------------------
+
+@_add
+class FILE_HANDLER_OT_xplane_obj(bpy.types.FileHandler):
+    """Dropping an .obj into the 3D Viewport (or the View Layer outliner)
+    imports it with this add-on, not with Blender's Wavefront importer.
+
+    Without this class Blender 5.2 has no file handler for `.obj` at all, so a
+    dropped X-Plane object did nothing; the OS drop falls through to whatever
+    handler claims the extension.
+    """
+    bl_idname = "IO_FH_xplane_obj"
+    bl_label = "X-Plane OBJ8 Object"
+    bl_import_operator = "import_scene.xplane_obj"
+    bl_file_extensions = ".obj"
+
+    @classmethod
+    def poll_drop(cls, context):
+        return poll_file_object_drop(context)
 
 
 # ---------------------------------------------------------------------------
