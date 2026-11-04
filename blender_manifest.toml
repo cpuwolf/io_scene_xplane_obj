@@ -36,4 +36,6 @@ paths_exclude_pattern = [
   "/verify/",
   "/dev-link.sh",
   "/*.zip",
+  "/*.gif",     # the README demo, 2 MB of it: GitHub can have it, the add-on
+                # package cannot
 ]

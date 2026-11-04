@@ -9,6 +9,11 @@ XPlane2Blender*), so **File > Import > X-Plane OBJ8** and then **File > Export >
 X-Plane Object (.obj)** is the whole workflow: there is no convert step to
 remember, and nothing to set up per file.
 
+![Importing an X-Plane OBJ8 object into Blender](blender_import_demo.gif)
+
+One `.obj` in, one XPlane2Blender authoring scene out: a collection, an armature
+with the file's animation on its bones, and a material per look.
+
 ## Install
 
 From [extensions.blender.org](https://extensions.blender.org/add-ons/io_scene_xplane_obj/)
