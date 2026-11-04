@@ -75,15 +75,12 @@ input, so the time line *is* the dataref:
   they collapse into one. Linear keys, because that is how the file
   interpolates; a rotation of more than 180° between two keys gets the one
   intermediate key Blender needs to replay the long way round;
-* `ANIM_show`/`ANIM_hide` become **step keyframes on `hide_viewport` /
-  `hide_render`** (`CONSTANT` interpolation, one key per visibility boundary),
-  so scrubbing the time line makes the parts appear and disappear exactly as the
-  file says — icing shapes at their level, the prop disc at 0 rpm. A batch the
-  file does not draw at the current value is hidden at import, and the import
-  report says how many; **Show All Parts** in the X-Plane panel reveals
-  everything for editing and **Restore Visibility** puts the schedule back.
-  The `ANIM_show`/`ANIM_hide` lines themselves stay in `xp8_anim_vis` and are
-  what gets written back — the keyframes are a preview, not the source.
+* `ANIM_show`/`ANIM_hide` stay **text** and are written back as they came in
+  (they live in `xp8_anim_vis` on the batch).  Nothing in the scene is hidden
+  and nothing is keyframed: a dataref is not a clock, so a `hide_viewport`
+  keyframe only invented a schedule — it hid parts the user then could not find
+  again, and XPlane2Blender reads that same flag as "export the animation only"
+  and drops the geometry without a word.
 
 **Import** options: *Animation at* (0..1, where to look — the pose you edit in),
 *Pin datarefs* (`dref=value, …` to hold one still while the rest sweeps, e.g. a
@@ -205,7 +202,6 @@ damage the text.
 | `xp8_fingerprints`, `xp8_cmd_hash` | Empty | what the "was anything changed?" test compares |
 | `xp8_leaf` | mesh | which batch it is |
 | `xp8_leaf`, `xp8_dataref`, `xp8_anim_range`, `xp8_anim_datarefs`, `xp8_anim_vis`, `xp8_anim_action`, `xp8_anim_keys` | rig Empty | the batch it drives, its driving dataref and value range, the visibility commands, the baked Action and the key positions it was built from |
-| `xp8_anim_vis_action` | mesh | the Action holding the step keys that show/hide the batch on the time line |
 | `xp8_placement` | mesh | legacy: a static `ANIM_trans` offset, still honoured on export |
 | `xp8_vt` | mesh attribute | source `VT` row index per vertex, so untouched rows keep their exact text |
 

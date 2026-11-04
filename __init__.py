@@ -541,72 +541,14 @@ class OBJECT_OT_xp8_clear_visibility(bpy.types.Operator):
             ob[XM.PROP_ANIM_VIS] = "[]"
             for child in ob.children:
                 XM.show_part(child)
-                action = child.get(XM.PROP_ANIM_VIS_ACTION)
-                if action:
+                # a scene imported before the preview keyframes were dropped
+                # still carries them: take the Action off, it is not the truth
+                if child.get("xp8_anim_vis_action"):
                     child.animation_data_clear()
-                    child.pop(XM.PROP_ANIM_VIS_ACTION, None)
+                    child.pop("xp8_anim_vis_action", None)
             n += 1
         self.report({'INFO'}, "%d part(s) are now drawn at every dataref value"
                     % n)
-        return {'FINISHED'}
-
-
-# ---------------------------------------------------------------------------
-# visibility: show the batches the file hides at the current dataref value
-# ---------------------------------------------------------------------------
-
-@_add
-class OBJECT_OT_xp8_show_all(bpy.types.Operator):
-    """Show every part of this object, ignoring ANIM_show/ANIM_hide"""
-    bl_idname = "object.xp8_show_all"
-    bl_label = "Show All Parts"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    @classmethod
-    def poll(cls, context):
-        return _find_header(context.active_object) is not None
-
-    def execute(self, context):
-        header = _find_header(context.active_object)
-        shown = 0
-        for ob in XM.parts(header):
-            action = ob.get(XM.PROP_ANIM_VIS_ACTION)
-            if action:
-                ad = ob.animation_data
-                if ad is not None and ad.action is not None:
-                    ad.action = None            # keep it, just stop driving
-                XM.show_part(ob)
-                shown += 1
-        self.report({'INFO'}, "%s: %d part(s) shown; use Restore Visibility to "
-                              "put the ANIM_show schedule back"
-                    % (header.name, shown))
-        return {'FINISHED'}
-
-
-@_add
-class OBJECT_OT_xp8_restore_visibility(bpy.types.Operator):
-    """Put the ANIM_show/ANIM_hide animation back on the time line"""
-    bl_idname = "object.xp8_restore_visibility"
-    bl_label = "Restore Visibility"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    @classmethod
-    def poll(cls, context):
-        return _find_header(context.active_object) is not None
-
-    def execute(self, context):
-        header = _find_header(context.active_object)
-        n = 0
-        for ob in XM.parts(header):
-            name = ob.get(XM.PROP_ANIM_VIS_ACTION)
-            action = bpy.data.actions.get(name) if name else None
-            if action is None:
-                continue
-            ob.animation_data_create()
-            ob.animation_data.action = action
-            n += 1
-        self.report({'INFO'}, "%s: %d part(s) back on the time line"
-                    % (header.name, n))
         return {'FINISHED'}
 
 
@@ -760,22 +702,6 @@ class VIEW3D_PT_xplane_obj(bpy.types.Panel):
                 info.label(text="rig: %s" % arm.name)
             else:
                 info.operator("object.xp8_anim_rig", icon='ADD')
-
-        if header.get("xp8_hidden_parts"):
-            vis = layout.box()
-            vis.label(text="%d part(s) hidden by ANIM_show"
-                       % header["xp8_hidden_parts"], icon='HIDE_ON')
-            row = vis.row(align=True)
-            row.operator("object.xp8_show_all", icon='HIDE_OFF')
-            row.operator("object.xp8_restore_visibility", icon='RECOVER_LAST')
-
-        if XM.is_batch(obj) and (obj.get(XM.PROP_ANIM_VIS_ACTION)
-                                 or obj.hide_viewport):
-            hidden = layout.box()
-            hidden.label(text="not drawn at this dataref value"
-                         if obj.hide_viewport else
-                         "drawn here; hidden elsewhere",
-                         icon='HIDE_ON' if obj.hide_viewport else 'HIDE_OFF')
 
         warnings = _json_list(header.get("xp8_warnings", "[]"))
         if warnings:

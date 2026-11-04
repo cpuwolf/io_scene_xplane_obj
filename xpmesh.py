@@ -72,7 +72,6 @@ PROP_ANIM_ACTION = "xp8_anim_action"
 PROP_ANIM_KEYS = "xp8_anim_keys"       # the command's key VALUES
 PROP_ANIM_FRAMES = "xp8_anim_frames"   # the frame each of those keys sits on
 PROP_ANIM_CMD = "xp8_anim_cmd"
-PROP_ANIM_VIS_ACTION = "xp8_anim_vis_action"
 PROP_BONES = "xp8_bones"               # the bone map of a nested-animation rig
 
 ROLE_HEADER = "header"
@@ -1016,42 +1015,6 @@ def visibility_steps(anim, leaf, ranges):
     return out
 
 
-def bake_visibility(ob, anim, leaf, ranges):
-    """Keyframe `hide_viewport` / `hide_render` from the ANIM_show/hide schedule.
-
-    Without this a batch that the file draws only at some dataref values is
-    hidden at import and *stays* hidden however far the time line is dragged --
-    which makes the part impossible to find, let alone edit.  Step keys with
-    CONSTANT interpolation are exactly what show/hide means, and Blender does
-    evaluate animated `hide_viewport` (checked: the object really disappears and
-    comes back as the frame changes).
-    """
-    steps = visibility_steps(anim, leaf, ranges)
-    if not steps or all(visible for _, visible in steps):
-        return None                     # always drawn: nothing to animate
-    action = bpy.data.actions.new(ob.name + "_vis")
-    action.use_fake_user = True
-    ob.animation_data_create()
-    ob.animation_data.action = action
-    keys = timeline_keys(anim, leaf)     # preview only: the range is what is written
-    frames = []
-    for t, _ in steps:
-        frame = frame_of(t, keys)
-        # Blender drops keyframes that sit closer together than ~1/24 frame,
-        # so two show/hide boundaries a hair apart in value space collapse into
-        # one key and the part never comes back.  With one key per frame the
-        # whole time line can be two frames long, which is exactly when that
-        # happens.  CONSTANT interpolation means a nudge is invisible.
-        if frames and frame < frames[-1] + VIS_MIN_STEP:
-            frame = frames[-1] + VIS_MIN_STEP
-        frames.append(frame)
-    hidden = [0.0 if visible else 1.0 for _, visible in steps]
-    for path in ("hide_viewport", "hide_render"):
-        _write_curve(action, ob, path, 0, frames, hidden, interp='CONSTANT')
-    ob[PROP_ANIM_VIS_ACTION] = action.name
-    return action
-
-
 def _chain_datarefs(chain):
     """Datarefs that move the batch.  Visibility-only ones are not included:
     the time line is defined by the transforms (see PropertyAnimRange)."""
@@ -1131,7 +1094,6 @@ def import_file(context, path, into_collection=None, report=None,
     leaf_objs = [None] * len(obj8.leaves)
     vline_pts = _parse_line_rows(obj8.vline)
     rigs_made = []
-    hidden = []
 
     # one armature for the whole file, its bones mirroring the ANIM block tree:
     # a batch hangs off the bone of its innermost block, so parts that share a
@@ -1183,21 +1145,13 @@ def import_file(context, path, into_collection=None, report=None,
             if parent is not header:
                 ob.parent = parent
         if anim is not None and chain:
+            # the ANIM_show/hide rules travel as text (and as XP2B datarefs on
+            # the bridge); nothing is hidden in the scene. A `hide_viewport`
+            # keyframe used to fake the schedule, but a dataref is not a clock:
+            # it hid parts the user then could not find, and XP2B reads that flag
+            # as "export the animation only" and drops the geometry.
             ob[PROP_ANIM_VIS] = json.dumps(_chain_visibility(chain))
-            if not anim.visible_at(pose, leaf_index):
-                ob.hide_viewport = True
-                ob.hide_render = True
-                hidden.append(ob.name)
         leaf_objs[leaf_index] = ob.name
-
-    if anim is not None and bake_actions:
-        for name in leaf_objs:
-            ob = bpy.data.objects.get(name) if name else None
-            if ob is None:
-                continue
-            leaf_index = ob.get(PROP_LEAF, -1)
-            if leaf_index in anim.leaves:
-                bake_visibility(ob, anim, leaf_index, anim.pose_ranges())
     if rigs_made and bake_actions:
         for rig, cmd in rigs_made:
             bake_command_action(rig, cmd, overrides)
@@ -1247,12 +1201,6 @@ def import_file(context, path, into_collection=None, report=None,
     header.select_set(True)
     context.view_layer.objects.active = header
 
-    if hidden:
-        header["xp8_hidden_parts"] = len(hidden)
-        warnings.append(
-            "%d part(s) are not drawn at this dataref value (ANIM_show): %s. "
-            "Drag the time line to bring them back, or use 'Show all parts' in "
-            "the X-Plane panel" % (len(hidden), ", ".join(hidden[:6])))
     if rigs_made:
         header["xp8_anim_parts"] = len(rigs_made)
     if bone_arm is not None:

@@ -232,46 +232,47 @@ def main():
             print("    warnings:", b.warnings[:4])
 
     # ---- 3. ANIM_show/hide must play on the time line --------------------
-    print("\n3. ANIM_show/hide on the time line:")
+    print("\n3. ANIM_show/hide stays text, none of it hides a part:")
+    # The schedule used to be faked with keyframed hide_viewport, which hid parts
+    # the user could not find again and made XP2B export "animation only" (no
+    # geometry).  The rules are text now: check they survived verbatim and that
+    # nothing in the scene is hidden.
     scene = bpy.context.scene
     checked = 0
     for src, h in sorted(headers.items()):
         anim = XA.build(OC.parse(src))
         names = json.loads(h.get(XM.PROP_LEAF_OBJS, "[]") or "[]")
-        if not anim.blocks:
-            continue
         bad = 0
         for leaf, chain in anim.leaves.items():
-            if not any(cmd["kind"] in (XA.CMD_SHOW, XA.CMD_HIDE)
-                       for block in chain for cmd in block.commands):
-                continue
-            if leaf >= len(names) or not names[leaf]:
+            rules = [cmd for block in chain for cmd in block.commands
+                     if cmd["kind"] in (XA.CMD_SHOW, XA.CMD_HIDE)]
+            if not rules or leaf >= len(names) or not names[leaf]:
                 continue
             ob = bpy.data.objects.get(names[leaf])
             if ob is None:
                 continue
-            keys = XM.timeline_keys(anim, leaf)   # frames 1..keys
-            for position in (0.0, 0.25, 0.5, 0.75, 1.0):
-                pose = {d: lo + (hi - lo) * position
-                        for d, (lo, hi) in anim.pose_ranges().items()}
-                frame = XM.frame_of(position, keys)
-                scene.frame_set(int(frame), subframe=frame - int(frame))
-                # animated hide_viewport is only readable after the depsgraph
-                # has caught up with the frame change
+            kept = json.loads(ob.get(XM.PROP_ANIM_VIS, "[]") or "[]")
+            want = [[cmd["kind"], cmd["v1"], cmd["v2"],
+                     cmd.get("dataref") or ""] for cmd in rules]
+            if kept != want:
+                bad += 1
+                print("   FAIL %s: %s keeps %s, the file says %s"
+                      % (os.path.basename(src), ob.name, kept, want))
+            if ob.hide_viewport or ob.get("xp8_anim_vis_action"):
+                bad += 1
+                print("   FAIL %s: %s is hidden or still carries a preview Action"
+                      % (os.path.basename(src), ob.name))
+            for frame in (1, 2):
+                scene.frame_set(frame)
                 bpy.context.view_layer.update()
-                want = anim.visible_at(pose, leaf)
-                if ob.hide_viewport == want:
+                if ob.hide_viewport:
                     bad += 1
-                    if bad <= 3:
-                        print("   FAIL %s: %s at %.0f%% is %s, the file says %s"
-                              % (os.path.basename(src), ob.name,
-                                 position * 100.0,
-                                 "hidden" if ob.hide_viewport else "drawn",
-                                 "drawn" if want else "hidden"))
+                    print("   FAIL %s: %s is hidden at frame %d"
+                          % (os.path.basename(src), ob.name, frame))
             checked += 1
-        check(not bad, "%s: %d show/hide evaluations disagree with the file"
+        check(not bad, "%s: %d part(s) do not carry their ANIM_show/hide as text"
               % (os.path.basename(src), bad))
-    print("  %d animated batch(es) with ANIM_show/hide checked at 5 positions"
+    print("  %d batch(es) with ANIM_show/hide: rules kept as text, nothing hidden"
           % checked)
 
     print("\n%s" % ("ALL CHECKS PASSED" if not fails
