@@ -17,6 +17,9 @@ What survives the conversion
 * ``ANIM_hide`` / ``ANIM_show`` as XP2B ``hide`` / ``show`` datarefs
 * ``ATTR_draw_disable`` as a material copy with ``draw = False``
 * ``ATTR_light_level`` as the material's light-level fields
+* ``ATTR_cockpit`` / ``_lit_only`` / ``_region`` / ``_device`` /
+  ``ATTR_no_cockpit`` as the material's *Cockpit Feature* plus the layer's
+  *Panel Texture Mode*, ``COCKPIT_REGION`` as the layer's region table
 * manipulators (the common signatures: command family, toggle, push, radio,
   delta/wrap, drag axis) as ``object.xplane.manip``
 * the geometry, with its materials and UVs, as the importer already built it
@@ -54,6 +57,18 @@ _UNSUPPORTED_MANIP = {
     "ATTR_manip_drag_axis_pix", "ATTR_manip_axis_knob",
     "ATTR_manip_axis_switch_up_down", "ATTR_manip_axis_switch_left_right",
 }
+
+#: The three panel spellings, and the XPlane2Blender *Panel Texture Mode* each
+#: one is.  In OBJ8 they are a per-material switch; XP2B splits the "what" (the
+#: material's Cockpit Feature) from the "how" (one mode per file).
+PANEL_MODE = {
+    "ATTR_cockpit": "cockpit",
+    "ATTR_cockpit_lit_only": "cockpit_lit_only",
+    "ATTR_cockpit_region": "cockpit_region",
+}
+
+PLUGIN_DEVICE = "Plugin Device"
+MAX_COCKPIT_REGIONS = 4
 
 
 def available():
@@ -294,6 +309,8 @@ class _Converter(object):
         self.pose = {}              # dataref values the rest poses are laid out at
         self.leaf_anchor = {}       # leaf index -> _Anchor, for bone-rigged batches
         self.children = {}          # block index (or None) -> child blocks
+        self.panel_mode = None      # the file's one panel mode, once it is known
+        self.material_cache = {}    # (material, values) -> the one clone sharing them
 
     # -- helpers ----------------------------------------------------------
     def warn(self, msg):
@@ -575,6 +592,7 @@ class _Converter(object):
 
         leaf_objs = json.loads(header.get(XM.PROP_LEAF_OBJS, "[]"))
         leaf_states = json.loads(header.get(XM.PROP_LEAF_STATES, "[]"))
+        self._cockpit_regions(obj8, coll)
 
         # visibility datarefs are not transforms: keep them out of the frame map
         self.anim = anim
@@ -665,6 +683,7 @@ class _Converter(object):
             self._apply_camera_state(ob, state)
             self._apply_shade_and_shiny(ob, state)
             self._apply_surface_state(ob, state)
+            self._apply_cockpit_state(ob, state, coll)
             if apply_manipulator(ob, state, self.warnings):
                 coll.xplane.layer.export_type = "cockpit"
             self._check_state(state, ob.name)
@@ -716,15 +735,7 @@ class _Converter(object):
     # -- per-part helpers -------------------------------------------------
     def _no_draw_material(self, ob, base):
         """ATTR_draw_disable -> a material copy with XP2B draw = False."""
-        for slot in ob.material_slots:
-            mat = slot.material
-            if mat is None:
-                continue
-            if getattr(mat.xplane, "draw", True):
-                clone = mat.copy()
-                clone.name = mat.name + "_nodraw"
-                clone.xplane.draw = False
-                slot.material = clone
+        self._material_set(ob, [("draw", False)], "nodraw")
 
     def _apply_light_level(self, ob, state):
         """ATTR_light_level -> material.xplane.lightLevel_* (an XP2B material attr)."""
@@ -741,20 +752,10 @@ class _Converter(object):
                     self.warn("%s: ATTR_light_level arguments not parsed"
                               % ob.name)
                     continue
-                for slot in ob.material_slots:
-                    mat = slot.material
-                    if mat is None:
-                        continue
-                    if getattr(mat.xplane, "lightLevel_dataref", "") not in ("",
-                                                                            dref):
-                        clone = mat.copy()
-                        clone.name = mat.name + "_light"
-                        slot.material = clone
-                        mat = clone
-                    mat.xplane.lightLevel = True
-                    mat.xplane.lightLevel_v1 = v1
-                    mat.xplane.lightLevel_v2 = v2
-                    mat.xplane.lightLevel_dataref = dref
+                self._material_set(ob, [
+                    ("lightLevel", True), ("lightLevel_v1", v1),
+                    ("lightLevel_v2", v2), ("lightLevel_dataref", dref),
+                ], "light")
 
     def _apply_camera_state(self, ob, state):
         """ATTR_solid_camera -> material.xplane.solid_camera (also a material attr)."""
@@ -769,14 +770,7 @@ class _Converter(object):
                     value = False
                 else:
                     continue
-                for slot in ob.material_slots:
-                    mat = slot.material
-                    if mat is None or mat.xplane.solid_camera == value:
-                        continue
-                    clone = mat.copy()
-                    clone.name = mat.name + "_cam"
-                    slot.material = clone
-                    clone.xplane.solid_camera = value
+                self._material_set(ob, [("solid_camera", value)], "cam")
 
     def _apply_shade_and_shiny(self, ob, state):
         """ATTR_shade_flat/smooth -> polygon shading, ATTR_shiny_rat -> specular.
@@ -843,29 +837,211 @@ class _Converter(object):
                 elif kw == "ATTR_no_poly_os":
                     self._material_set(ob, [("poly_os", 0)], "poly_os")
 
+    def _apply_cockpit_state(self, ob, state, coll):
+        """ATTR_cockpit* -> material Cockpit Feature + the layer's panel mode.
+
+        Five spellings, one switch: draw this batch into the panel texture
+        (``ATTR_cockpit``), only into its emissive half
+        (``ATTR_cockpit_lit_only``), into one region of it
+        (``ATTR_cockpit_region``), into a device texture
+        (``ATTR_cockpit_device``), or normally again (``ATTR_no_cockpit``).
+
+        XPlane2Blender splits that across two places: the *material* says
+        whether it uses the panel (Cockpit Feature -> Panel Texture / Cockpit
+        Device), the *layer* says how the panel is drawn (Panel Texture Mode) -
+        one mode per file.  A file that mixes modes therefore cannot be
+        reproduced exactly; the first mode wins and the mixture is reported.
+        """
+        for cat, raws in state or []:
+            if cat != "cockpit":
+                continue
+            for raw in raws:
+                words = raw.split()
+                if not words:
+                    continue
+                kw = words[0]
+                args = [w for w in words[1:] if not w.startswith("#")]
+                if kw == "ATTR_no_cockpit":
+                    self._material_set(ob, [("cockpit_feature", "none")],
+                                       "cockpit")
+                elif kw == "ATTR_cockpit_device":
+                    self._apply_cockpit_device(ob, args, ob.name)
+                elif kw in PANEL_MODE:
+                    self._apply_panel_material(ob, kw, args, coll)
+
+    def _apply_panel_material(self, ob, kw, args, coll):
+        """One panel keyword -> the material fields, then the layer's mode."""
+        nums = []
+        for arg in args:
+            try:
+                nums.append(int(float(arg)))
+            except ValueError:
+                break           # a trailing comment or junk: stop here
+        region = lum = None
+        if kw == "ATTR_cockpit_region":
+            region = nums[0] if nums else None
+            lum = nums[1] if len(nums) > 1 else None
+            if region is None:
+                self.warn("%s: ATTR_cockpit_region without a region number is "
+                          "the pre-11.10 form; XPlane2Blender needs the number, "
+                          "left at region 1" % ob.name)
+        else:
+            lum = nums[0] if nums else None
+
+        pairs = [("cockpit_feature", "panel")]
+        if region is not None:
+            # the file counts regions from 0, XPlane2Blender's enum from 1
+            pairs.append(("cockpit_region",
+                          str(min(MAX_COCKPIT_REGIONS, max(1, region + 1)))))
+        if lum is not None:
+            # ATTR_cockpit [luminance] (X-Plane 12): the panel's maximum
+            # brightness in nits, its own switch in XP2B
+            pairs += [("cockpit_feature_use_luminance", True),
+                      ("cockpit_feature_luminance", lum)]
+        self._material_set(ob, pairs, "panel")
+
+        mode = PANEL_MODE[kw]
+        layer = coll.xplane.layer
+        if self.panel_mode is None:
+            self.panel_mode = mode
+            layer.cockpit_panel_mode = mode
+        elif layer.cockpit_panel_mode != mode:
+            self.warn("%s: the file mixes cockpit panel modes (%s and %s); "
+                      "XPlane2Blender has one per file, kept %s"
+                      % (ob.name, layer.cockpit_panel_mode, mode,
+                         layer.cockpit_panel_mode))
+
+    def _apply_cockpit_device(self, ob, args, name):
+        """ATTR_cockpit_device <name> <bus mask> <rheostat> <auto adjust> [lum]."""
+        if len(args) < 4:
+            self.warn("%s: ATTR_cockpit_device has %d argument(s), needs device,"
+                      " bus, rheostat and auto-adjust; material left plain"
+                      % (name, len(args)))
+            return
+        dev, bus, rheo, auto = args[0], args[1], args[2], args[3]
+        try:
+            bus = int(float(bus))
+            rheo = int(float(rheo))
+            auto = int(float(auto))
+        except ValueError:
+            self.warn("%s: ATTR_cockpit_device arguments are not numbers (%s)"
+                      % (name, " ".join(args[:4])))
+            return
+
+        # XPlane2Blender knows the built-in devices by name and everything else
+        # as a plugin device, which is how the file spells both
+        known = set()
+        prop = ob.material_slots[0].material.xplane.bl_rna.properties.get(
+            "device_name") if ob.material_slots and ob.material_slots[0].material \
+            else None
+        if prop is not None:
+            known = {i.identifier for i in prop.enum_items}
+        pairs = [("cockpit_feature", "device"),
+                 ("device_name", dev if dev in known else PLUGIN_DEVICE),
+                 ("plugin_device", "" if dev in known else dev)]
+        # the file's bus is a bit mask over the six systems, XP2B has six flags
+        pairs += [("device_bus_%d" % bit, bool(bus & (1 << bit)))
+                  for bit in range(6)]
+        if rheo < 0:
+            self.warn("%s: rheostat channel %d means \"no channel\", which "
+                      "XPlane2Blender cannot express; wrote 0" % (name, rheo))
+            rheo = 0
+        pairs += [("device_lighting_channel", rheo),
+                  ("device_auto_adjust", bool(auto))]
+        if len(args) > 4:
+            try:
+                pairs += [("cockpit_feature_use_luminance", True),
+                          ("cockpit_feature_luminance", int(float(args[4])))]
+            except ValueError:
+                pass
+        self._material_set(ob, pairs, "device")
+
+    def _cockpit_regions(self, obj8, coll):
+        """COCKPIT_REGION -> the layer's region table.
+
+        The file writes ``COCKPIT_REGION <left> <bottom> <right> <top>`` in
+        panel-texture pixels, one line per region, in region order.  XP2B keeps
+        an origin plus a power-of-two width and height per region, so a region
+        that is not a power of two on each axis cannot be expressed.
+        """
+        rows = []
+        for line in obj8.globals:
+            words = line.split()
+            if not words or words[0] != "COCKPIT_REGION":
+                continue
+            if len(words) < 5:
+                self.warn("COCKPIT_REGION %s: needs left bottom right top, "
+                          "region left unnamed" % " ".join(words[1:]))
+                rows.append(None)
+                continue
+            try:
+                rows.append([int(float(v)) for v in words[1:5]])
+            except ValueError:
+                self.warn("COCKPIT_REGION %s: not four numbers, region left "
+                          "unnamed" % " ".join(words[1:5]))
+                rows.append(None)
+        if not rows:
+            return
+        layer = coll.xplane.layer
+        layer.cockpit_regions = str(min(MAX_COCKPIT_REGIONS, len(rows)))
+        if len(rows) > MAX_COCKPIT_REGIONS:
+            self.warn("%d COCKPIT_REGION entries; XPlane2Blender keeps at most "
+                      "%d, the rest are dropped"
+                      % (len(rows), MAX_COCKPIT_REGIONS))
+        for index, row in enumerate(rows[:MAX_COCKPIT_REGIONS]):
+            slot = layer.cockpit_region[index]
+            if row is None:
+                continue
+            left, bottom, right, top = row
+            slot.left = left
+            slot.top = bottom       # XP2B calls the bottom edge "top"
+            slot.width = self._power_of_two(right - left, index, "width")
+            slot.height = self._power_of_two(top - bottom, index, "height")
+
+    def _power_of_two(self, size, index, axis):
+        """XP2B stores a region's extent as an exponent; say when it cannot."""
+        if size <= 0:
+            self.warn("COCKPIT_REGION %d: %s is %d, not a positive power of "
+                      "two; wrote 1" % (index, axis, size))
+            return 1
+        exponent = int(round(math.log(size, 2)))
+        if 2 ** exponent != size:
+            self.warn("COCKPIT_REGION %d: %s is %d, not a power of two; "
+                      "XPlane2Blender stores an exponent, wrote 2**%d"
+                      % (index, axis, size, exponent))
+        return min(11, max(1, exponent))
+
     def _material_set(self, ob, pairs, tag):
         """Set material fields, cloning the material when a value would change
 
         Two batches can share a material and disagree about a state, and a
-        material carries one value - so the second one gets its own copy.
+        material carries one value - so the second one gets its own copy.  The
+        clone is cached per (material, values), because otherwise every batch
+        that carries the same ``ATTR_draw_disable`` would get its own identical
+        copy: a 160-material cockpit for a file that has three distinct looks.
         """
+        key = tuple(pairs)
         for slot in ob.material_slots:
             mat = slot.material
             if mat is None:
                 continue
-            if any(getattr(mat.xplane, name) == value for name, value in pairs):
+            if all(getattr(mat.xplane, name) == value for name, value in pairs):
                 continue
-            clone = mat.copy()
-            clone.name = mat.name + "_" + tag
+            slot_key = (mat.as_pointer(),) + key
+            clone = self.material_cache.get(slot_key)
+            if clone is None:
+                clone = mat.copy()
+                clone.name = mat.name + "_" + tag
+                for name, value in pairs:
+                    setattr(clone.xplane, name, value)
+                self.material_cache[slot_key] = clone
             slot.material = clone
-            for name, value in pairs:
-                setattr(clone.xplane, name, value)
 
     def _check_state(self, state, name):
         # only what is really mapped - anything else has to be reported, or the
         # file comes back looking fine with a state line silently missing
         keep = {"manip", "draw", "light_level", "camera", "shiny", "shade",
-                "blend", "shadow", "poly_os"}
+                "blend", "shadow", "poly_os", "cockpit"}
         for cat, raws in state or []:
             if cat in keep:
                 continue

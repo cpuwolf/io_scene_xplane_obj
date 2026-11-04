@@ -1,0 +1,33 @@
+I
+800
+OBJ
+
+# Fixture: the cockpit panel switch, all of it in one file.
+#   * ATTR_cockpit with X-Plane 12's luminance argument
+#   * ATTR_no_cockpit going back to plain drawing
+#   * ATTR_cockpit_device with a bus mask, rheostat channel and auto-adjust
+# The three batches share one material, so the conversion has to split it.
+TEXTURE	panel.png
+GLOBAL_cockpit_lit
+POINT_COUNTS	12 0 0 18
+
+VT	0	0	0	0	0	-1	0	0
+VT	1	0	0	0	0	-1	1	0
+VT	1	1	0	0	0	-1	1	1
+VT	0	1	0	0	0	-1	0	1
+VT	2	0	0	0	0	-1	0	0
+VT	3	0	0	0	0	-1	1	0
+VT	3	1	0	0	0	-1	1	1
+VT	2	1	0	0	0	-1	0	1
+VT	4	0	0	0	0	-1	0	0
+VT	5	0	0	0	0	-1	1	0
+VT	5	1	0	0	0	-1	1	1
+VT	4	1	0	0	0	-1	0	1
+IDX10	0 1 2 0 2 3 4 5 6 4 6 7 8 9 10 8 10 11
+
+ATTR_cockpit	1000
+TRIS	0 6
+ATTR_no_cockpit
+TRIS	6 6
+ATTR_cockpit_device	GNS530_1	3	1	1
+TRIS	12 6

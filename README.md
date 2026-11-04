@@ -249,7 +249,11 @@ objects:
 | `ANIM_show` / `ANIM_hide` | `show` / `hide` datarefs with the file's range |
 | `ATTR_draw_disable` | a material copy with *Draw Objects With This Material* off |
 | `ATTR_light_level` | the material's light-level fields |
+| `ATTR_cockpit*` | the material's *Cockpit Feature* (`Panel Texture` / `Cockpit Device`, or none) plus the layer's *Panel Texture Mode*; `COCKPIT_REGION` becomes the layer's region table |
 | `ATTR_manip_*` | `object.xplane.manip` (command family, toggle, push, radio, delta/wrap, drag axis) |
+
+Material clones are shared: batches that ask for the same state combination get
+one clone, not one each (a cockpit that would land 163 materials lands 5).
 
 The bridge does not copy the scene: it re-parents the imported meshes onto its
 own armature and swaps in `_nodraw` / `_cam` material clones, so after an import
@@ -322,6 +326,7 @@ blender -b --factory-startup --python verify/anim_roundtrip.py -- verify/fixture
 blender -b --factory-startup --python verify/check_selection.py   # export = selection
 blender -b --factory-startup --python verify/check_bones.py -- <file.obj>       # nested animation -> bones
 blender -b --factory-startup --python verify/check_bones_xp2b.py -- <file.obj>  # ... and out through XP2B
+blender -b --factory-startup --python verify/check_cockpit.py -- <file.obj>     # ATTR_cockpit* -> cockpit feature, and back
 
 # stronger: run the same tests against a real aircraft
 blender -b --factory-startup --python verify/roundtrip_blender.py -- \
