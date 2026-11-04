@@ -14,6 +14,11 @@ remember, and nothing to set up per file.
 One `.obj` in, one XPlane2Blender authoring scene out: a collection, an armature
 with the file's animation on its bones, and a material per look.
 
+![Laminar's King Air C90B imported from its own .obj](aircraft_demo.gif)
+
+A real aircraft, not a toy file: Laminar's King Air C90B cockpit/exterior
+objects, imported straight from the `.obj` X-Plane ships.
+
 ## Install
 
 From [extensions.blender.org](https://extensions.blender.org/add-ons/io_scene_xplane_obj/)
@@ -33,8 +38,8 @@ longer needs one of its own.
   armature, one Action per file, built in place rather than in a preview scene
   that a second pass then rebuilds. There is no preview rig to ignore and no
   leftover collection holding a header;
-* one `.obj` becomes a header Empty plus one mesh per geometry command, so a
-  21-part fuselage is 21 objects you can hide, edit and join;
+* one `.obj` becomes one mesh per geometry command, so a 21-part fuselage is 21
+  objects you can hide, edit and join;
 * `TEXTURE` / `TEXTURE_LIT` / `TEXTURE_NORMAL` become a Principled material
   (base colour, emission, normal map), and the original *relative* texture paths
   (`../../objects/foo/bar.png`) are written back out unchanged;
@@ -42,7 +47,8 @@ longer needs one of its own.
   stores lighting normals per vertex and they are not the averaged face normals
   Blender would otherwise compute;
 * the command stream (`ANIM_*`, `ATTR_*`, `LIGHT_*`, `ATTR_LOD`, `IF`/`ENDIF`,
-  …) is kept verbatim on the header Empty and replayed around the regenerated
+  …) is kept verbatim on the collection (`xp8_dump`, `xp8_events`) and replayed
+  around the regenerated
   geometry, so moving a vertex does **not** delete the aircraft's door animation;
 * the imported scene keeps the file *as text*, so a scene you did not touch is
   written back **byte for byte** by the standalone exporter described further
