@@ -779,8 +779,8 @@ def build_bone_armature(context, coll, header, name, specs, ob=None):
     arm[PROP_ROLE] = ROLE_ARMATURE
     arm.parent = header
     arm.matrix_parent_inverse.identity()
-    arm.show_in_front = True
-    data.display_type = 'OCTAHEDRAL'
+    arm.show_in_front = False
+    data.display_type = 'WIRE'
 
     previous = context.view_layer.objects.active
     for other in context.selected_objects:

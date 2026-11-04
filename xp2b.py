@@ -344,8 +344,11 @@ class _Converter(object):
         data = bpy.data.armatures.new(name)
         arm = bpy.data.objects.new(name, data)
         coll.objects.link(arm)
-        arm.show_in_front = True
-        data.display_type = 'OCTAHEDRAL'
+        # wire, not octahedra, and not drawn through the mesh: a cockpit rig is
+        # hundreds to thousands of bones and the shapes are noise on top of the
+        # geometry you are trying to work on
+        arm.show_in_front = False
+        data.display_type = 'WIRE'
         if self.root is not None:
             # the whole rig hangs off one Empty at the world centre: move that
             # and the aircraft moves, which is the one thing a collection full
