@@ -226,6 +226,10 @@ def apply_manipulator(ob, state, warnings):
             return True
         if kw == "ATTR_manip_drag_axis":
             manip.type = "drag_axis"
+            if any(cat == "detent_axis" for cat, _raws in state or []):
+                # ATTR_axis_detented next to the axis is XP2B's manipulator type,
+                # not a separate line: it writes the marker back out itself
+                manip.type = "drag_axis_detent"
             manip.cursor = _cursor(args[0])
             manip.dx, manip.dy, manip.dz = (float(a) for a in args[1:4])
             manip.v1, manip.v2 = float(args[4]), float(args[5])
@@ -332,11 +336,6 @@ class _Converter(object):
                        and ob.get(XM.PROP_ROLE) == XM.ROLE_HEADER]
             if len(headers) > 1:
                 continue
-            # XP2B exports every object in an exportable collection, so the
-            # header (which only holds the file's text) moves out of it
-            for holder in list(self.header.users_collection):
-                holder.objects.unlink(self.header)
-            master.objects.link(self.header)
             coll.name = base + "_xp2b"
             return coll
         coll = _new_collection(base + "_xp2b")
@@ -607,6 +606,7 @@ class _Converter(object):
             self._apply_shade_and_shiny(ob, state)
             self._apply_surface_state(ob, state)
             self._apply_cockpit_state(ob, state, coll)
+            self._apply_detent_ranges(ob, state)
             if apply_manipulator(ob, state, self.warnings):
                 coll.xplane.layer.export_type = "cockpit"
             self._check_state(state, ob.name)
@@ -749,6 +749,40 @@ class _Converter(object):
                     self._material_set(ob, [("poly_os", value)], "poly_os")
                 elif kw == "ATTR_no_poly_os":
                     self._material_set(ob, [("poly_os", 0)], "poly_os")
+
+    def _apply_detent_ranges(self, ob, state):
+        """ATTR_axis_detent_range <start> <end> <height> -> the manipulator's
+        *Axis Detent Ranges* table (object > X-Plane > Manipulator).
+
+        One line per region, in file order.  XPlane2Blender writes them back as
+        the same three numbers, so the table is the whole conversion.
+        """
+        if not ob.xplane.manip.enabled:
+            # the ranges only exist on a manipulator, and this one has none:
+            # XPlane2Blender writes them per object, so there is nowhere to put
+            # them until the ATTR_manip_* line next to them is supported
+            for cat, raws in state or []:
+                if cat == "detent_range" and raws:
+                    self.warn("%s: ATTR_axis_detent_range dropped - its "
+                              "manipulator is not converted" % ob.name)
+            return
+        for cat, raws in state or []:
+            if cat != "detent_range":
+                continue
+            for raw in raws:
+                words = raw.split()
+                if not words or words[0] != "ATTR_axis_detent_range":
+                    continue
+                try:
+                    start, end, height = (float(word) for word in words[1:4])
+                except ValueError:
+                    self.warn("%s: ATTR_axis_detent_range needs three numbers (%s)"
+                              % (ob.name, raw))
+                    continue
+                item = ob.xplane.manip.axis_detent_ranges.add()
+                item.start = start
+                item.end = end
+                item.height = height
 
     def _apply_cockpit_state(self, ob, state, coll):
         """ATTR_cockpit* -> material Cockpit Feature + the layer's panel mode.
@@ -964,7 +998,8 @@ class _Converter(object):
         # only what is really mapped - anything else has to be reported, or the
         # file comes back looking fine with a state line silently missing
         keep = {"manip", "draw", "light_level", "camera", "shiny", "shade",
-                "blend", "shadow", "poly_os", "cockpit"}
+                "blend", "shadow", "poly_os", "cockpit", "detent_range",
+                "detent_axis"}
         for cat, raws in state or []:
             if cat in keep:
                 continue
@@ -977,6 +1012,28 @@ class _Converter(object):
                     pass
                 else:
                     self.warn("%s: %s is not converted" % (name, kw))
+
+
+#: what the header Empty carries and the collection now keeps, so the file's
+#: own text survives the object
+SOURCE_PROPS = (XM.PROP_DUMP, XM.PROP_SOURCE, XM.PROP_LEAF_OBJS,
+                XM.PROP_LEAF_STATES, XM.PROP_GLOBALS, XM.PROP_EVENTS,
+                XM.PROP_FINGERPRINTS, XM.PROP_CMD_HASH)
+
+
+def _keep_source(coll, header):
+    """Move the file's data from the header Empty onto the collection, then the
+    caller deletes the Empty.
+
+    The Empty existed to hold the OBJ8 text and the batch tables.  All of that
+    is either replayed into the scene already or only needed for the standalone
+    exporter, and an Empty sitting at the world origin that nothing parents to
+    reads as leftover junk in the outliner.
+    """
+    for name in SOURCE_PROPS:
+        value = header.get(name)
+        if value is not None:
+            coll[name] = value
 
 
 def convert(context, headers, report=None):
@@ -1000,5 +1057,7 @@ def convert(context, headers, report=None):
         if warnings:
             coll["xp2b_convert_warnings"] = json.dumps(warnings)
             header["xp2b_convert_warnings"] = len(warnings)
+        _keep_source(coll, header)
+        bpy.data.objects.remove(header, do_unlink=True)
         out.append(coll)
     return out

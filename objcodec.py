@@ -307,6 +307,13 @@ def parse_text(text):
         if cat is not None:
             if cat == "detent_range":
                 state.setdefault(cat, []).append(stripped)
+            elif cat == "manip":
+                # ATTR_axis_detent_range lines belong to the manipulator that
+                # follows them, not to the file: they are repeatable, so a new
+                # manipulator starts a new list (C90B cockpit: 30 ranges piled
+                # onto one object instead of 3 on each of ten)
+                state.pop("detent_range", None)
+                state[cat] = [stripped]
             else:
                 if cat not in state:
                     state_order.append(cat)

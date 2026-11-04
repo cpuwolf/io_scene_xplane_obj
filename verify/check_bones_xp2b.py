@@ -166,8 +166,10 @@ def main():
 
     print("source: %s" % SRC)
     bpy.ops.import_scene.xplane_obj(filepath=SRC)
-    header = bpy.context.view_layer.objects.active
-    src_text = header.get(XM.PROP_DUMP, "")
+    # the source data lives on the exportable collection: the importer drops the
+    # header Empty once the conversion has replayed it into the scene
+    colls = [c for c in bpy.data.collections if c.xplane.is_exportable_collection]
+    src_text = colls[0].get(XM.PROP_DUMP, "") if colls else ""
     src = OC.parse_text(src_text)
     src_anim = XA.build(src)
 
