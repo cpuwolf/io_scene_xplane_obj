@@ -44,7 +44,9 @@ header = bpy.context.view_layer.objects.active
 print("header:", header.name, "parts:", len(IMP.xpmesh.parts(header)),
       "events:", len(__import__("json").loads(header[IMP.xpmesh.PROP_EVENTS])))
 
-res = bpy.ops.object.xp8_to_xp2b()
+res = (bpy.ops.object.xp8_to_xp2b()
+       if not [c for c in bpy.data.collections if c.xplane.is_exportable_collection]
+       else "skipped, the import already built it")
 print("convert:", res)
 
 new = [c for c in bpy.data.collections if c.xplane.is_exportable_collection]

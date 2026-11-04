@@ -675,7 +675,7 @@ def _bone_name(block_index, order):
     return "b%03d_%d" % (block_index, order)
 
 
-def bone_tree(anim, pose):
+def bone_tree(anim, pose, all_blocks=False):
     """The whole file's animation as one bone tree: a bone per transform command.
 
     The ANIM blocks *are* a hierarchy - a translate, a hide, a show, a pivot plus
@@ -689,20 +689,35 @@ def bone_tree(anim, pose):
     ``ANIM_rotate_key 1 53.690156`` is that bone's own 53.690156 degrees and
     nothing else - no product with its parents, no baked pose.
 
+    ``all_blocks`` bones every block instead of only the ones on a cascade
+    chain: a hinge gets one bone, and a block that only shows or hides gets a
+    bare anchor bone (``cmd`` None) to hang the rule and the geometry on.  That
+    is the shape XPlane2Blender wants - it writes ``ANIM_hide`` inside the
+    bone's own ``ANIM_begin``, so the block scopes exactly as the file does.
+    The importer leaves it off: its preview rig keeps a hinge as an Empty.
+
     Returns (specs, tips): specs are
     ``(bone name, head, command, parent bone name, block index)``, parents first;
     tips maps a block index to its innermost bone.
     """
-    nested = set()
-    for leaf, chain in anim.leaves.items():
-        if len(chain_transforms(chain)) > 1:
-            nested.update(block.index for block in chain)
+    wanted = set()
+    for block in anim.blocks:
+        if all_blocks:
+            if any(cmd["kind"] in (XA.CMD_ROTATE, XA.CMD_ROTATE_KEYS,
+                                   XA.CMD_TRANS, XA.CMD_TRANS_KEYS,
+                                   XA.CMD_SHOW, XA.CMD_HIDE)
+                   for cmd in block.commands):
+                wanted.add(block.index)
+    if not all_blocks:
+        for leaf, chain in anim.leaves.items():
+            if len(chain_transforms(chain)) > 1:
+                wanted.update(block.index for block in chain)
 
     specs = []
     cumulative = {}     # block index -> matrix up to its last command
     tips = {}           # block index -> its innermost bone (or its parent's)
     for block in anim.blocks:
-        if block.index not in nested:
+        if block.index not in wanted:
             continue
         parent_bone = None
         cum = Matrix.Identity(4)
@@ -713,11 +728,23 @@ def bone_tree(anim, pose):
                 cum = cumulative[ancestor.index]
                 break
             ancestor = ancestor.parent
-        for order, cmd in enumerate(cmd for cmd in block.commands
-                                    if cmd["kind"] in (XA.CMD_ROTATE,
-                                                       XA.CMD_ROTATE_KEYS,
-                                                       XA.CMD_TRANS,
-                                                       XA.CMD_TRANS_KEYS)):
+        transforms = [cmd for cmd in block.commands
+                      if cmd["kind"] in (XA.CMD_ROTATE, XA.CMD_ROTATE_KEYS,
+                                         XA.CMD_TRANS, XA.CMD_TRANS_KEYS)]
+        if not transforms:
+            # show/hide only: nothing to move, but the rule needs a block of its
+            # own to sit in, and that is a bone.  Only the XPlane2Blender path
+            # asks for these - the importer's preview rig skips such a block,
+            # it has no transformation to show.
+            if not all_blocks:
+                continue
+            name = _bone_name(block.index, 0)
+            specs.append((name, cum.translation.copy(), None, parent_bone,
+                          block.index))
+            cumulative[block.index] = cum
+            tips[block.index] = name
+            continue
+        for order, cmd in enumerate(transforms):
             m = Matrix([list(row) for row in
                         XA.to_bl(XA.cmd_matrix(cmd, pose))])
             name = _bone_name(block.index, order)
@@ -807,6 +834,9 @@ def bake_bone_tree(context, arm, specs, overrides=None):
         # channel is the file's own axis, one key per file key, and a sweep past
         # 180 degrees needs no extra keys to keep its direction.
         pose_bone.rotation_mode = 'AXIS_ANGLE'
+        if cmd is None:
+            # an anchor bone for a block that only shows or hides: no curve
+            continue
         dataref = cmd.get("dataref")
         rotates = cmd["kind"] in (XA.CMD_ROTATE, XA.CMD_ROTATE_KEYS)
         if dataref:

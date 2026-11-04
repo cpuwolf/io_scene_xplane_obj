@@ -18,6 +18,7 @@ things have to be true for that to be worth anything:
    wrong pivot or a lost key table does not.
 """
 import json
+import math
 import os
 import sys
 import tempfile
@@ -104,6 +105,13 @@ def visible_points(obj8, anim, position):
     return sorted(out)
 
 
+def _nearest(point, points):
+    """Distance from `point` to the closest point in `points` (0.0 if empty)."""
+    if not points:
+        return 0.0
+    return min(math.dist(point, other) for other in points)
+
+
 def centroid(points):
     if not points:
         return (0.0, 0.0, 0.0)
@@ -125,7 +133,8 @@ def main():
     src = OC.parse_text(src_text)
     src_anim = XA.build(src)
 
-    print("convert: %s" % (bpy.ops.object.xp8_to_xp2b(),))
+    if not [c for c in bpy.data.collections if c.xplane.is_exportable_collection]:
+        print("convert: %s" % (bpy.ops.object.xp8_to_xp2b(),))
     new = [c for c in bpy.data.collections if c.xplane.is_exportable_collection]
     check(len(new) == 1, "expected one exportable collection, got %d" % len(new))
     if not new:
@@ -155,6 +164,13 @@ def main():
         for bone in bones:
             datarefs = bone.xplane.datarefs
             for i, dataref in enumerate(datarefs):
+                if dataref.anim_type in ("show", "hide"):
+                    # a visibility rule, not a transform: it carries v1/v2 and
+                    # no value curve at all, which is how XP2B writes it
+                    print("      %s <- %-46s %s %g..%g"
+                          % (bone.name, dataref.path, dataref.anim_type,
+                             dataref.show_hide_v1, dataref.show_hide_v2))
+                    continue
                 path = 'bones["%s"].xplane.datarefs[%d].value' % (bone.name, i)
                 frames = _keyframes(arm, path)
                 print("      %s <- %-46s %d key(s)"
@@ -245,20 +261,31 @@ def main():
     hidden = 0
     worst = 0
     for position in sorted(positions):
-        want = visible_points(src, src_anim, position)
-        got = visible_points(out, out_anim, position)
-        if len(want) != len(got):
-            check(False, "at %.3f: the file draws %d vertices, the export %d "
-                         "(a show/hide rule landed on the wrong part)"
-                  % (position, len(want), len(got)))
-            continue
+        # a set, at 0.1 m: XPlane2Blender re-splits vertices and recomputes
+        # their coordinates in float32, so a 0.01 m wobble at 16 m is rounding,
+        # not a different part - what must match is *which* positions are drawn
+        def coarse(points):
+            return {tuple(round(value, 1) for value in point) for point in points}
+
+        want = coarse(visible_points(src, src_anim, position))
+        got = coarse(visible_points(out, out_anim, position))
         if not want:
             hidden += 1
-        delta = max((abs(p[i] - q[i]) for p, q in zip(want, got)
-                     for i in range(3)), default=0.0)
-        worst = max(worst, delta)
-        check(delta <= 0.1, "at %.3f: visible geometry is %.3f m off"
-              % (position, delta))
+        missing = want - got
+        extra = got - want
+        if missing or extra:
+            delta = max((_nearest(point, got) for point in missing), default=0.0)
+            delta = max(delta, max((_nearest(point, want) for point in extra),
+                                   default=0.0))
+            worst = max(worst, delta)
+            check(False, "at %.3f: %d of the file's vertices are not drawn, %d "
+                         "extra ones are (worst %.3f m) - a show/hide rule "
+                         "landed on the wrong part%s%s"
+                  % (position, len(missing), len(extra), delta,
+                     "" if not missing else " missing e.g. %s" % (sorted(missing)[:2],),
+                     "" if not extra else " extra e.g. %s" % (sorted(extra)[:2],)))
+            continue
+        check(True, "")
     print("   %d pose(s) checked (%d of them with everything hidden), worst "
           "%.3f m" % (len(positions), hidden, worst))
 
