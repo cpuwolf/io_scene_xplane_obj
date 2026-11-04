@@ -1,22 +1,22 @@
-"""Nested animation: does the bone chain reproduce the file's cascade?
+"""Nested animation: one armature for the file, bones mirroring the ANIM tree.
 
     blender -b --factory-startup --python verify/check_bones.py -- [file.obj]
 
-An OBJ8 batch wrapped by more than one transform command (a static pivot plus a
-keyed rotate, or two nested ANIM_begin blocks with one dataref each) is imported
-as an armature with one bone per command.  This checks the three claims that
-matter:
+A batch wrapped by more than one transform command is a cascade, and the ANIM
+blocks around it *are* a hierarchy.  The importer builds **one armature for the
+whole file**, its bone tree a copy of the block tree, one bone per transform
+command, and hangs each batch off the bone of its innermost block.  This checks
+the three claims that matter:
 
-1. structure - a nested batch is bone-parented to an armature with as many
-   bones as the file has transform commands, a single-command batch is still an
-   Empty rig, and nothing gets an Armature modifier (OBJ8 has no skinning: a
-   modifier would be baked into the vertices);
-2. pose - at every key frame the batch's world matrix equals the matrix
-   `xpanim` evaluates from the file, so the bones mean the same thing the
-   ANIM_* lines do.  Without this the rig is just numbers that look plausible;
+1. structure - exactly one armature, its bones named/parented/placed like the
+   block tree, two batches inside one block sharing one bone, and no Armature
+   modifier anywhere (OBJ8 has no skinning: a modifier would be baked into the
+   vertices at frame 1);
+2. pose - every bone at every key frame holds `base^-1 @ M` for its *own*
+   command, so `ANIM_rotate_key 1 53.690156` is that bone's own 53.690156
+   degrees, and the bone's `xp8_angle_deg` property says so in degrees;
 3. round trip - an untouched import still writes back byte for byte, and an
-   export with animation='BLENDER' leaves the bone-rigged batches' animation
-   from the file alone instead of writing a flat key table over it.
+   export with animation='BLENDER' leaves bone-rigged batches alone.
 """
 import json
 import os
@@ -25,6 +25,7 @@ import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 import bpy                                              # noqa: E402
+from mathutils import Matrix                            # noqa: E402
 
 sys.path.insert(0, os.path.dirname(REPO))
 pkg = __import__(os.path.basename(REPO))
@@ -54,18 +55,6 @@ def sha(path):
     return h.hexdigest()
 
 
-def matrices_for(cmds, values_at_frame):
-    """The chain's accumulated matrix at one frame, straight from the file."""
-    pose = {}
-    total = XA.IDENT
-    for cmd in cmds:
-        dataref = cmd.get("dataref")
-        if dataref:
-            pose[dataref] = values_at_frame[dataref]
-        total = XA.mat_mul(total, XA.cmd_matrix(cmd, pose))
-    return total
-
-
 def main():
     os.makedirs(OUT, exist_ok=True)
     for ob in list(bpy.data.objects):
@@ -80,106 +69,104 @@ def main():
     leaf_objs = json.loads(header.get(XM.PROP_LEAF_OBJS, "[]"))
     pose0 = XM.pose_at(anim, 0.0, {})
 
-    armatures = []
-    rig_empties = []
-    plain = []
-    for leaf, name in enumerate(leaf_objs):
-        if not name:
-            continue
-        ob = bpy.data.objects.get(name)
-        chain = anim.leaves.get(leaf) or []
-        cmds = [cmd for cmd in XM.chain_transforms(chain)
-                if cmd.get("dataref") or not XM._is_identity(cmd, pose0)]
-        arm = XM.armature_of(ob)
-        print("  batch %-2d %-22s commands %d  parent %s"
-              % (leaf, name, len(cmds),
-                 "bone %s" % ob.parent_bone if arm else
-                 ("empty %s" % ob.parent.name if ob.parent else "header")))
+    specs, tips = XM.bone_tree(anim, pose0)
+    leaf_bone = XM.leaf_bones(anim, tips)
 
+    print("\n1. structure: the file's ANIM tree as one armature")
+    armatures = [ob for ob in bpy.data.objects if XM.is_armature(ob)]
+    print("   %d armature(s), %d bone(s) expected, %d batch(es) on bones"
+          % (len(armatures), len(specs), len(leaf_bone)))
+    if not specs:
+        print("   this file has no nested animation: nothing to check")
+        return 0
+    check(len(armatures) == 1,
+          "expected one armature for the whole file, got %d" % len(armatures))
+    if not armatures:
+        return 1
+    arm = armatures[0]
+    check([b.name for b in arm.data.bones] == [spec[0] for spec in specs],
+          "bone set does not mirror the block tree")
+    check(arm.parent is header, "the armature is not under the header")
+
+    for name, head, cmd, parent, block in specs:
+        bone = arm.data.bones.get(name)
+        if bone is None:
+            check(False, "bone %s is missing" % name)
+            continue
+        check((bone.parent.name if bone.parent else None) == parent,
+              "bone %s: parent %s, expected %s"
+              % (name, bone.parent and bone.parent.name, parent))
+        check((bone.head_local - head).length < 1e-5,
+              "bone %s: head %.4f m off its pivot"
+              % (name, (bone.head_local - head).length))
+        check(not bone.use_connect,
+              "bone %s is connected (a connected bone forces location 0)" % name)
+
+    for leaf, name in enumerate(leaf_objs):
+        ob = bpy.data.objects.get(name) if name else None
+        if ob is None:
+            continue
+        want = leaf_bone.get(leaf)
+        if want:
+            check(ob.parent is arm and ob.parent_bone == want,
+                  "batch %d hangs off %s/%s, expected bone %s"
+                  % (leaf, ob.parent and ob.parent.name, ob.parent_bone, want))
+        else:
+            check(ob.parent is not arm,
+                  "batch %d is on a bone but its chain is a single hinge" % leaf)
         check(not any(m.type == 'ARMATURE' for m in ob.modifiers),
               "batch %d has an Armature modifier: OBJ8 has no skinning" % leaf)
 
-        if len(cmds) > 1:
-            check(arm is not None,
-                  "batch %d has %d transform commands but no armature"
-                  % (leaf, len(cmds)))
-            if arm is None:
-                continue
-            armatures.append((leaf, ob, arm, cmds))
-            check(len(arm.data.bones) == len(cmds),
-                  "batch %d: %d bones for %d commands"
-                  % (leaf, len(arm.data.bones), len(cmds)))
-            check(ob.parent_type == 'BONE',
-                  "batch %d is not bone-parented" % leaf)
-            check(ob.parent_bone == arm.data.bones[-1].name,
-                  "batch %d is not on the innermost bone" % leaf)
-            names = [bone.name for bone in arm.data.bones]
-            stored = [entry["bone"] for entry in XM.bone_commands(arm)]
-            check(names == stored,
-                  "batch %d: bone order %s does not match the stored map %s"
-                  % (leaf, names, stored))
-            check(arm.animation_data is not None
-                  and arm.animation_data.action is not None,
-                  "batch %d: the armature has no Action" % leaf)
-        elif len(cmds) == 1:
-            rig_empties.append(leaf)
-            check(arm is None, "batch %d got an armature for one command" % leaf)
-            check(XM.is_rig(ob.parent),
-                  "batch %d is not on a rig Empty" % leaf)
-        else:
-            plain.append(leaf)
-            check(arm is None and ob.parent is header,
-                  "batch %d has no animation but hangs off something else" % leaf)
+    shared = {}
+    for leaf, name in leaf_bone.items():
+        shared.setdefault(name, []).append(leaf)
+    reused = sorted((bone, leaves) for bone, leaves in shared.items()
+                    if len(leaves) > 1)
+    print("   %d bone(s) carry more than one batch%s"
+          % (len(reused), (", e.g. %s -> %s" % reused[0]) if reused else ""))
 
-    print("\n1. structure: %d armature(s), %d Empty rig(s), %d static batch(es)"
-          % (len(armatures), len(rig_empties), len(plain)))
-    check(armatures, "the fixture produced no armature at all")
-
-    print("\n2. pose at every key frame:")
-    # Per bone, not per chain: one bone = one command = one key table, and each
-    # table runs over frames 1..its own key count.  Two commands on the same
-    # dataref with different key counts therefore sit at different values on the
-    # same frame - that is the convention this scene shares with XPlane2Blender
-    # (one key per frame, per command), so the check has to be per command too.
+    print("\n2. pose, and the file's own degrees on the bone:")
     scene = bpy.context.scene
     worst = 0.0
-    for leaf, ob, arm, cmds in armatures:
-        bones = arm.data.bones
-        for index, cmd in enumerate(cmds):
-            bone = bones["anim%d" % index]
-            parent_rest = (bones["anim%d" % (index - 1)].matrix_local
-                           if index else XM.Matrix.Identity(4))
-            base = parent_rest.inverted() @ bone.matrix_local
-            values = (XM._subdivide(cmd, XM.command_values(cmd))
-                      if cmd.get("dataref") else [None])
-            for frame, value in enumerate(values, start=1):
-                pose = dict(pose0)
-                if cmd.get("dataref"):
-                    pose[cmd["dataref"]] = value
-                want = base.inverted() @ XM.Matrix(
-                    [list(row) for row in XA.to_bl(XA.cmd_matrix(cmd, pose))])
-                scene.frame_set(frame)
-                bpy.context.view_layer.update()
-                got = arm.pose.bones[bone.name].matrix_basis
-                delta = max(abs(got[i][j] - want[i][j])
-                            for i in range(4) for j in range(4))
-                worst = max(worst, delta)
-                if delta > 1e-4:
-                    check(False, "batch %d bone %d frame %d: pose is %.4f off "
-                                 "the file's matrix"
-                          % (leaf, index, frame, delta))
-        checked = sum(len(cmd.get("keys") or [cmd]) for cmd in cmds)
-        print("  batch %-3d %d bone(s), %d key(s) checked"
-              % (leaf, len(cmds), checked))
-    print("  worst matrix delta %.2e" % worst)
-    check(worst <= 1e-4, "bone poses drift from the file's own matrices")
+    readable = []
+    for name, head, cmd, parent, block in specs:
+        bone = arm.data.bones[name]
+        parent_rest = (arm.data.bones[parent].matrix_local if parent
+                       else Matrix.Identity(4))
+        base = parent_rest.inverted() @ bone.matrix_local
+        values = (XM._subdivide(cmd, XM.command_values(cmd))
+                  if cmd.get("dataref") else [None])
+        for frame, value in enumerate(values, start=1):
+            pose = dict(pose0)
+            if cmd.get("dataref") and value is not None:
+                pose[cmd["dataref"]] = value
+            want = base.inverted() @ Matrix(
+                [list(row) for row in XA.to_bl(XA.cmd_matrix(cmd, pose))])
+            scene.frame_set(frame)
+            bpy.context.view_layer.update()
+            got = arm.pose.bones[name].matrix_basis
+            delta = max(abs(got[i][j] - want[i][j])
+                        for i in range(4) for j in range(4))
+            worst = max(worst, delta)
+            if delta > 1e-4:
+                check(False, "bone %s frame %d: pose is %.4f off its command"
+                      % (name, frame, delta))
+        if cmd["kind"] in (XA.CMD_ROTATE, XA.CMD_ROTATE_KEYS):
+            degrees = bone.get("xp8_angle_deg")
+            if degrees is not None:
+                readable.append((name, cmd.get("dataref") or "-",
+                                 round(degrees, 6)))
+    print("   worst matrix delta %.2e" % worst)
+    check(worst <= 1e-4, "poses drift from the file's own matrices")
+    for name, dataref, degrees in readable[:8]:
+        print("   %-10s %-44s %11.6f deg" % (name, dataref[:44], degrees))
 
     print("\n3. round trip:")
     dst = os.path.join(OUT, os.path.basename(SRC))
     stats = XM.export_header(bpy.context, header, dst, preserve=True)
     same = sha(SRC) == sha(dst)
-    print("  untouched: %-9s %s" % ("verbatim" if stats["verbatim"] else "REGEN",
-                                    "IDENTICAL" if same else "DIFFERS"))
+    print("   untouched: %-9s %s" % ("verbatim" if stats["verbatim"] else "REGEN",
+                                     "IDENTICAL" if same else "DIFFERS"))
     check(same, "an untouched import with an armature is not byte identical")
 
     stem = os.path.splitext(os.path.basename(SRC))[0]
@@ -203,7 +190,7 @@ def main():
             delta = max(abs(a[leaf][i][j] - b[leaf][i][j])
                         for i in range(4) for j in range(4))
             worst = max(worst, delta)
-    print("  animation='BLENDER': worst matrix delta %.2e, %d batches"
+    print("   animation='BLENDER': worst matrix delta %.2e, %d batches"
           % (worst, len(src_anim.leaves)))
     check(worst <= 1e-3, "the exported motion differs from the source")
 

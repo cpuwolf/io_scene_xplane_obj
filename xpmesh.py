@@ -664,35 +664,89 @@ def _bone_parent(ob, arm, bone_name):
     return ob
 
 
-def _armature_for(context, coll, header, name, commands, pose, leaf_index,
-                  ob=None):
-    """An armature with one bone per transform command, outermost bone first.
+def _bone_name(block_index, order):
+    return "b%03d_%d" % (block_index, order)
 
-    Bones sit at the pivots the command chain leaves the part at (so the rig is
-    readable), and their pose carries the commands: `pose = parent_pose @
-    base @ basis`, base being the rest offset Blender multiplies in, which makes
-    `basis = base^-1 @ M` for the file's own matrix `M`.
 
-    Returns (armature object, [(bone name, base matrix, command), ...]).
+def bone_tree(anim, pose):
+    """The whole file's animation as one bone tree: a bone per transform command.
+
+    The ANIM blocks *are* a hierarchy - a translate, a hide, a show, a pivot plus
+    a roll - and one armature is the only Blender thing that can say that in one
+    place.  So the tree is built once for the file, mirroring the block tree, and
+    every batch hangs off the bone of its innermost block.  Two batches inside
+    the same block share the same bone, which is the point: the file shares the
+    block too, and it is what made a per-batch rig wrong.
+
+    Each bone carries only its own command, so an
+    ``ANIM_rotate_key 1 53.690156`` is that bone's own 53.690156 degrees and
+    nothing else - no product with its parents, no baked pose.
+
+    Returns (specs, tips): specs are
+    ``(bone name, head, command, parent bone name, block index)``, parents first;
+    tips maps a block index to its innermost bone.
     """
-    mats = [Matrix([list(row) for row in XA.to_bl(XA.cmd_matrix(cmd, pose))])
-            for cmd in commands]
-    length = _bone_length(ob)
-    heads = []
-    cum = Matrix.Identity(4)
-    for m in mats:
-        heads.append(cum.translation.copy())
-        cum = cum @ m
+    nested = set()
+    for leaf, chain in anim.leaves.items():
+        if len(chain_transforms(chain)) > 1:
+            nested.update(block.index for block in chain)
 
+    specs = []
+    cumulative = {}     # block index -> matrix up to its last command
+    tips = {}           # block index -> its innermost bone (or its parent's)
+    for block in anim.blocks:
+        if block.index not in nested:
+            continue
+        parent_bone = None
+        cum = Matrix.Identity(4)
+        ancestor = block.parent
+        while ancestor is not None:
+            if ancestor.index in tips:
+                parent_bone = tips[ancestor.index]
+                cum = cumulative[ancestor.index]
+                break
+            ancestor = ancestor.parent
+        for order, cmd in enumerate(cmd for cmd in block.commands
+                                    if cmd["kind"] in (XA.CMD_ROTATE,
+                                                       XA.CMD_ROTATE_KEYS,
+                                                       XA.CMD_TRANS,
+                                                       XA.CMD_TRANS_KEYS)):
+            m = Matrix([list(row) for row in
+                        XA.to_bl(XA.cmd_matrix(cmd, pose))])
+            name = _bone_name(block.index, order)
+            specs.append((name, cum.translation.copy(), cmd, parent_bone,
+                          block.index))
+            cum = cum @ m
+            parent_bone = name
+        cumulative[block.index] = cum
+        tips[block.index] = parent_bone
+    return specs, tips
+
+
+def leaf_bones(anim, tips):
+    """{leaf index: innermost bone name} for the batches a bone chain covers."""
+    out = {}
+    for leaf, chain in anim.leaves.items():
+        if len(chain_transforms(chain)) <= 1:
+            continue                # a hinge: the Empty rig path still carries it
+        for block in reversed(chain):
+            if tips.get(block.index):
+                out[leaf] = tips[block.index]
+                break
+    return out
+
+
+def build_bone_armature(context, coll, header, name, specs, ob=None):
+    """Create the file's one armature, its bones parented like the ANIM blocks."""
+    length = _bone_length(ob)
     data = bpy.data.armatures.new(name)
     arm = bpy.data.objects.new(name, data)
     coll.objects.link(arm)
     arm[PROP_ROLE] = ROLE_ARMATURE
-    arm[PROP_LEAF] = leaf_index
     arm.parent = header
     arm.matrix_parent_inverse.identity()
     arm.show_in_front = True
-    arm.data.display_type = 'OCTAHEDRAL'
+    data.display_type = 'OCTAHEDRAL'
 
     previous = context.view_layer.objects.active
     for other in context.selected_objects:
@@ -700,57 +754,46 @@ def _armature_for(context, coll, header, name, commands, pose, leaf_index,
     context.view_layer.objects.active = arm
     arm.select_set(True)
     bpy.ops.object.mode_set(mode='EDIT')
-    edit = []
-    for index, head in enumerate(heads):
-        bone = data.edit_bones.new(_bone_name(index))
+    for bone_name, head, cmd, parent_bone, _block in specs:
+        bone = data.edit_bones.new(bone_name)
         bone.head = head
         bone.tail = head + Vector((0.0, length, 0.0))
         bone.roll = 0.0
         bone.use_connect = False        # a connected bone forces location = 0
-        if edit:
-            bone.parent = edit[-1]
-        edit.append(bone)
+        if parent_bone is not None:
+            bone.parent = data.edit_bones[parent_bone]
     bpy.ops.object.mode_set(mode='OBJECT')
     context.view_layer.objects.active = previous
     for other in context.selected_objects:
         other.select_set(False)
     if previous is not None:
         previous.select_set(True)
-
-    pairs = []
-    for index, cmd in enumerate(commands):
-        bone = data.bones[_bone_name(index)]
-        rest = bone.matrix_local
-        parent_rest = (bone.parent.matrix_local if bone.parent
-                       else Matrix.Identity(4))
-        # Blender composes a child as parent_pose @ (parent_rest^-1 @ rest) @
-        # basis, so `base` is that rest offset and basis = base^-1 @ M
-        base = parent_rest.inverted() @ rest
-        bone[PROP_LEAF] = leaf_index
-        bone[PROP_DATAREF] = cmd.get("dataref") or ""
-        bone[PROP_ANIM_CMD] = cmd["kind"]
-        try:
-            set_rig_range(bone, *command_range(cmd))
-        except (TypeError, ValueError):
-            pass
-        pairs.append((bone.name, base, cmd))
-    return arm, pairs
+    return arm
 
 
-def bake_bone_actions(context, arm, pairs, overrides=None):
-    """Bake every bone's command into one Action on the armature.
+def bake_bone_tree(context, arm, specs, overrides=None):
+    """Key every bone with its own command, and keep the file's degrees readable.
 
-    One Action for the whole chain, one f-curve pair per bone, so Blender plays
-    the cascade: key N sits on frame N, the same frame-for-key mapping the rig
-    Empties use, and a static command (no dataref) is a single key at frame 1.
+    One Action for the armature, one pair of curves per bone: key N on frame N,
+    the same frame-for-key mapping the rig Empties use.  Alongside the pose, each
+    bone gets ``xp8_angle_deg`` keyed with the command's own angle, so a
+    ``ANIM_rotate_key 1 53.690156`` can be read (and checked) as 53.690156 in the
+    bone's custom properties instead of being reverse-engineered out of a
+    quaternion.
     """
+    data = arm.data
     action = bpy.data.actions.new(arm.name + "_anim")
     action.use_fake_user = True
     arm.animation_data_create()
     arm.animation_data.action = action
     report = []
-    for name, base, cmd in pairs:
-        pose_bone = arm.pose.bones[name]
+    for bone_name, head, cmd, parent_bone, block_index in specs:
+        bone = data.bones[bone_name]
+        parent_rest = (data.bones[parent_bone].matrix_local
+                       if parent_bone else Matrix.Identity(4))
+        base = parent_rest.inverted() @ bone.matrix_local
+
+        pose_bone = arm.pose.bones[bone_name]
         pose_bone.rotation_mode = 'QUATERNION'
         dataref = cmd.get("dataref")
         if dataref:
@@ -759,11 +802,12 @@ def bake_bone_actions(context, arm, pairs, overrides=None):
         else:
             values = [None]
             frames = [1.0]
-        locs, quats = [], []
+
+        locations, quaternions, degrees = [], [], []
         previous = None
         for value in values:
             pose = dict(overrides or {})
-            if dataref:
+            if dataref and value is not None:
                 pose[dataref] = value
             m = Matrix([list(row) for row in
                         XA.to_bl(XA.cmd_matrix(cmd, pose))])
@@ -771,19 +815,44 @@ def bake_bone_actions(context, arm, pairs, overrides=None):
             if previous is not None and quat.dot(previous) < 0.0:
                 quat.negate()           # keep the shortest arc between keys
             previous = quat
-            locs.append(loc)
-            quats.append(quat)
-        path = 'pose.bones["%s"]' % name
+            locations.append(loc)
+            quaternions.append(quat)
+            degrees.append(round(_angle_at(cmd, value
+                                           if value is not None else 0.0), 6)
+                           if cmd["kind"] in (XA.CMD_ROTATE,
+                                              XA.CMD_ROTATE_KEYS) else None)
+
+        path = 'pose.bones["%s"]' % bone_name
         for axis in range(3):
             _write_curve(action, arm, path + ".location", axis, frames,
-                         [loc[axis] for loc in locs])
+                         [loc[axis] for loc in locations])
         for axis in range(4):
             _write_curve(action, arm, path + ".rotation_quaternion", axis,
-                         frames, [quat[axis] for quat in quats])
-        report.append({"bone": name, "kind": cmd["kind"],
-                       "dataref": dataref or "",
+                         frames, [quat[axis] for quat in quaternions])
+
+        bone[PROP_DATAREF] = dataref or ""
+        bone[PROP_ANIM_CMD] = cmd["kind"]
+        try:
+            set_rig_range(bone, *command_range(cmd))
+        except (TypeError, ValueError):
+            pass
+        if cmd["kind"] in (XA.CMD_ROTATE, XA.CMD_ROTATE_KEYS):
+            axis = cmd.get("axis") or (0.0, 1.0, 0.0)
+            bone["xp8_axis"] = "%s %s %s" % tuple(OC.fmt_num(v) for v in axis)
+            bone["xp8_angle_deg"] = degrees[0]
+            # A pose bone owns the keyed property (its f-curve lives on the
+            # armature object), the data bone keeps the same value read-only so
+            # the file's degree is visible without going into Pose Mode.
+            pose_bone["xp8_angle_deg"] = degrees[0]
+            _write_curve(action, arm, path + '["xp8_angle_deg"]', 0, frames,
+                         degrees)
+        report.append({"bone": bone_name, "block": block_index,
+                       "kind": cmd["kind"], "dataref": dataref or "",
+                       "axis": cmd.get("axis"),
                        "keys": [v for v in values if v is not None],
+                       "degrees": degrees,
                        "frames": [round(f, 4) for f in frames]})
+
     arm[PROP_ANIM_ACTION] = action.name
     arm[PROP_BONES] = json.dumps(report)
     arm[PROP_ANIM_DATAREFS] = json.dumps(
@@ -1046,8 +1115,19 @@ def import_file(context, path, into_collection=None, report=None,
     leaf_objs = [None] * len(obj8.leaves)
     vline_pts = _parse_line_rows(obj8.vline)
     rigs_made = []
-    bones_made = []
     hidden = []
+
+    # one armature for the whole file, its bones mirroring the ANIM block tree:
+    # a batch hangs off the bone of its innermost block, so parts that share a
+    # block share a bone - which is what the file does
+    bone_specs, bone_tips = (bone_tree(anim, pose) if anim is not None
+                             else ([], {}))
+    bone_arm = None
+    leaf_bone = {}
+    if bone_specs:
+        bone_arm = build_bone_armature(context, coll, header, base + "_bones",
+                                       bone_specs)
+        leaf_bone = leaf_bones(anim, bone_tips)
 
     for leaf_index, leaf in enumerate(obj8.leaves):
         if leaf.kind == "TRIS":
@@ -1066,15 +1146,10 @@ def import_file(context, path, into_collection=None, report=None,
         chain = (anim.leaves.get(leaf_index) or []) if anim is not None else []
         commands = [cmd for cmd in chain_transforms(chain)
                     if cmd.get("dataref") or not _is_identity(cmd, pose)]
-        if len(commands) > 1:
-            # a cascade of transforms: one bone per command, parented in file
-            # order, so the inner motion rides on the outer one
-            arm, pairs = _armature_for(
-                context, coll, header,
-                "%s_%03d_bones" % (base, leaf_index), commands, pose,
-                leaf_index, ob)
-            _bone_parent(ob, arm, pairs[-1][0])
-            bones_made.append((arm, pairs))
+        bone = leaf_bone.get(leaf_index)
+        if bone:
+            # a cascade: the batch rides the file's own block hierarchy
+            _bone_parent(ob, bone_arm, bone)
         else:
             parent = header
             for n, cmd in enumerate(commands):
@@ -1110,10 +1185,9 @@ def import_file(context, path, into_collection=None, report=None,
     if rigs_made and bake_actions:
         for rig, cmd in rigs_made:
             bake_command_action(rig, cmd, overrides)
-    if bones_made and bake_actions:
-        for arm, pairs in bones_made:
-            bake_bone_actions(context, arm, pairs, overrides)
-    if (rigs_made or bones_made) and bake_actions:
+    if bone_arm is not None and bake_actions:
+        bake_bone_tree(context, bone_arm, bone_specs, overrides)
+    if (rigs_made or bone_arm is not None) and bake_actions:
         # the animated properties are now owned by the Actions
         if anim.leaves:
             # the time line is the key table: one key per frame, so the scene
@@ -1165,9 +1239,10 @@ def import_file(context, path, into_collection=None, report=None,
             "the X-Plane panel" % (len(hidden), ", ".join(hidden[:6])))
     if rigs_made:
         header["xp8_anim_parts"] = len(rigs_made)
-    if bones_made:
-        header["xp8_anim_armatures"] = len(bones_made)
-        header["xp8_anim_parts"] = len(rigs_made) + len(bones_made)
+    if bone_arm is not None:
+        header["xp8_anim_armatures"] = 1
+        header["xp8_anim_bones"] = len(bone_specs)
+        header["xp8_anim_parts"] = len(rigs_made) + len(leaf_bone)
     for w in warnings:
         if report:
             report({'WARNING'}, w)
