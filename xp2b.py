@@ -402,131 +402,56 @@ class _Converter(object):
                 ob.keyframe_insert(data_path="rotation_axis_angle")
                 self.key_dataref(dr, n, value)
 
-        # 4. visibility datarefs live on the outermost Empty of the block
-        for cmd in block.commands:
-            if cmd["kind"] not in (CMD_SHOW, CMD_HIDE):
-                continue
-            dr_path = cmd.get("dataref")
-            if not dr_path:
-                self.warn("block %d: %s without a dataref"
-                          % (block.index,
-                             "ANIM_show" if cmd["kind"] == CMD_SHOW
-                             else "ANIM_hide"))
-                continue
-            host = anc[0] if anc else make("_vis")
-            dr = _add_dataref(host,
-                              dr_path,
-                              "show" if cmd["kind"] == CMD_SHOW else "hide")
-            dr.show_hide_v1 = cmd.get("v1", 0.0)
-            dr.show_hide_v2 = cmd.get("v2", 0.0)
-
         return _Anchor(anc[-1]) if anc else parent
 
     # -- nested animation: one bone per transform command -------------------
     TRANSFORM_KINDS = (CMD_ROTATE, CMD_ROTATE_KEYS, CMD_TRANS, CMD_TRANS_KEYS)
 
-    def prepare_regions(self, anim):
-        """Which block subtrees become a bone region, and which stay Empties.
+    def prepare_tree(self, anim):
+        """Which blocks carry a bone, and which batch hangs where.
 
-        A bone can carry a transform dataref, but *not* an `ANIM_show/hide`:
-        XPlane2Blender writes those for an object only, and an object's dataref
-        reaches the geometry parented under it - which a bone cannot be (a
-        bone's children are bones, and a bone cannot hang under an object).
-        So a subtree that carries show/hide anywhere keeps its Empty chain, and
-        a **bone region** is a maximal subtree that carries none and holds a
-        nested batch (two or more transform commands around one batch).
+        One armature for the whole file, its bone tree copied from the block
+        tree (``XM.bone_tree``, the same one the importer uses, so the two
+        agree): a block carries bones when it is on the chain of a batch that
+        needs more than one transform command.  Every batch hangs off the bone of
+        its innermost bone-carrying block, so parts that share a block share a
+        bone - which is what the file does and what per-batch rigs got wrong.
         """
         self.children = {}
         for block in anim.blocks:
             key = block.parent.index if block.parent is not None else None
             self.children.setdefault(key, []).append(block)
+        self.specs, self.tips = XM.bone_tree(anim, self.pose)
 
-        self.vis_free = {}
-        self.nested = {}
-        for block in reversed(anim.blocks):
-            own_vis = any(c["kind"] in (CMD_SHOW, CMD_HIDE)
-                          for c in block.commands)
-            kids = self.children.get(block.index, [])
-            self.vis_free[block.index] = (not own_vis) and all(
-                self.vis_free[k.index] for k in kids)
-            nested = False
-            for leaf in block.leaves:
-                chain = anim.leaves.get(leaf) or []
-                index = [b.index for b in chain]
-                if block.index not in index:
-                    continue
-                inside = chain[index.index(block.index):]
-                count = sum(1 for blk in inside for cmd in blk.commands
-                            if cmd["kind"] in self.TRANSFORM_KINDS)
-                if count > 1:
-                    nested = True
-                    break
-            self.nested[block.index] = nested
+    def build_armature(self, coll, base):
+        """The file's one armature: edit bones from the block tree, then keyed.
 
-    def starts_region(self, block):
-        if not (self.vis_free[block.index] and self.nested[block.index]):
-            return False
-        parent = block.parent
-        if parent is None:
-            return True
-        return not (self.vis_free[parent.index] and self.nested[parent.index])
-
-    def build_region(self, block, parent, coll, base, handled):
-        """One armature for a vis-free nested subtree: a bone per command.
-
-        The bones compose exactly like the file's ANIM_* blocks - the cascade
-        *is* the hierarchy - and the batch is bone-parented to its innermost
-        bone.  No Armature modifier: OBJ8 has no skinning, and XPlane2Blender
-        bakes a modifier's deformation into the vertices at frame 1.
+        Bones carry XPlane2Blender's own ``datarefs`` (on the armature *data*,
+        which is where XP2B reads them) and the pose curves (on the object, which
+        is where XP2B samples the pose).  Both are keyed frame 1..N, one key per
+        file key, the mapping XP2B documents.
         """
-        specs = []          # (bone name, head, command, parent bone name)
-        leaves = {}         # leaf index -> bone name
-
-        def walk(blk, cum, parent_bone):
-            handled.add(blk.index)
-            for n, cmd in enumerate([c for c in blk.commands
-                                     if c["kind"] in self.TRANSFORM_KINDS]):
-                m = Matrix([list(row) for row in
-                            XA.to_bl(XA.cmd_matrix(cmd, self.pose))])
-                name = "b%03d_%d" % (blk.index, n)
-                specs.append((name, cum.translation.copy(), cmd, parent_bone))
-                cum = cum @ m
-                parent_bone = name
-            for leaf in blk.leaves:
-                chain = self.anim.leaves.get(leaf) or []
-                if chain and chain[-1].index == blk.index:
-                    leaves[leaf] = parent_bone
-            for kid in self.children.get(blk.index, []):
-                walk(kid, cum, parent_bone)
-
-        walk(block, Matrix.Identity(4), None)
-
-        name = "%s_b%03d_bones" % (base, block.index)
+        name = base + "_bones"
         data = bpy.data.armatures.new(name)
         arm = bpy.data.objects.new(name, data)
         coll.objects.link(arm)
-        if parent is not None:
-            parent.attach(arm)
         arm.show_in_front = True
         data.display_type = 'OCTAHEDRAL'
 
-        length = 0.1
         previous = self.context.view_layer.objects.active
         for other in self.context.selected_objects:
             other.select_set(False)
         self.context.view_layer.objects.active = arm
         arm.select_set(True)
         bpy.ops.object.mode_set(mode='EDIT')
-        made = []
-        for bone_name, head, cmd, parent_bone in specs:
+        for bone_name, head, cmd, parent_bone, block in self.specs:
             bone = data.edit_bones.new(bone_name)
             bone.head = head
-            bone.tail = head + Vector((0.0, length, 0.0))
+            bone.tail = head + Vector((0.0, 0.1, 0.0))
             bone.roll = 0.0
             bone.use_connect = False        # a connected bone forces location = 0
             if parent_bone is not None:
                 bone.parent = data.edit_bones[parent_bone]
-            made.append(bone)
         bpy.ops.object.mode_set(mode='OBJECT')
         self.context.view_layer.objects.active = previous
         for other in self.context.selected_objects:
@@ -539,12 +464,10 @@ class _Converter(object):
         arm.animation_data_create()
         arm.animation_data.action = action
 
-        for bone_name, head, cmd, parent_bone in specs:
+        for bone_name, head, cmd, parent_bone, block in self.specs:
             bone = data.bones[bone_name]
             parent_rest = (data.bones[parent_bone].matrix_local
                            if parent_bone else Matrix.Identity(4))
-            # Blender composes a child as parent_pose @ (parent_rest^-1 @ rest)
-            # @ basis, so basis = base^-1 @ M for the command's own matrix M
             base_matrix = parent_rest.inverted() @ bone.matrix_local
             dataref = cmd.get("dataref")
             if dataref:
@@ -552,38 +475,40 @@ class _Converter(object):
                 if len(values) < 2:
                     self.warn("block %d: %s on bone %s has %d key(s); "
                               "XPlane2Blender needs 2"
-                              % (block.index, cmd["kind"], bone_name,
-                                 len(values)))
-                # a rotation of more than 180 degrees between two keys needs the
-                # intermediate keys, or both the quaternion and the angle
-                # XPlane2Blender writes replay it the short way round
-                values = XM._subdivide(cmd, values)
+                              % (block, cmd["kind"], bone_name, len(values)))
                 frames = [float(i + 1) for i in range(len(values))]
             else:
                 values = [None]
                 frames = [1.0]
-            locs, quats = [], []
-            previous_quat = None
+            # AXIS_ANGLE: the file's rotation is an axis plus a keyed angle, so
+            # the bone stores exactly that - no quaternion, no short-arc
+            # surprises, and a 350 degree sweep keeps its direction
+            pose_bone = arm.pose.bones[bone_name]
+            pose_bone.rotation_mode = 'AXIS_ANGLE'
+            rotates = cmd["kind"] in (CMD_ROTATE, CMD_ROTATE_KEYS)
+            locations, angles = [], []
             for value in values:
                 pose = dict(self.pose)
                 if dataref and value is not None:
                     pose[dataref] = value
                 m = Matrix([list(row) for row in
                             XA.to_bl(XA.cmd_matrix(cmd, pose))])
-                loc, quat, _scale = (base_matrix.inverted() @ m).decompose()
-                if previous_quat is not None and quat.dot(previous_quat) < 0.0:
-                    quat.negate()       # keep the shortest arc between keys
-                previous_quat = quat
-                locs.append(loc)
-                quats.append(quat)
+                loc, _quat, _scale = (base_matrix.inverted() @ m).decompose()
+                locations.append(loc)
+                angles.append(math.radians(XM._angle_at(
+                    cmd, value if value is not None else 0.0)) if rotates
+                    else 0.0)
+            axis_bl = XM._unit(_xp_to_bl(cmd.get("axis") or (0.0, 1.0, 0.0)))
             path = 'pose.bones["%s"]' % bone_name
-            for axis in range(3):
-                XM._write_curve(action, arm, path + ".location", axis, frames,
-                                [loc[axis] for loc in locs])
-            for axis in range(4):
-                XM._write_curve(action, arm, path + ".rotation_quaternion",
-                                axis, frames, [quat[axis] for quat in quats])
-            arm.pose.bones[bone_name].rotation_mode = 'QUATERNION'
+            for index in range(3):
+                XM._write_curve(action, arm, path + ".location", index, frames,
+                                [loc[index] for loc in locations])
+            XM._write_curve(action, arm, path + ".rotation_axis_angle", 0,
+                            frames, angles)
+            for index in range(3):
+                XM._write_curve(action, arm, path + ".rotation_axis_angle",
+                                index + 1, frames,
+                                [axis_bl[index]] * len(frames))
             if dataref and len(values) >= 2:
                 datarefs = bone.xplane.datarefs
                 dr = datarefs.add()
@@ -598,10 +523,38 @@ class _Converter(object):
                         data_path=dataref_path, frame=frame,
                         group="XPlane Datarefs " + bone_name)
                 self.frames_used = max(self.frames_used, int(max(frames)))
-
-        for leaf, bone_name in leaves.items():
-            self.leaf_anchor[leaf] = _Anchor(arm=arm, bone=bone_name)
         return arm
+
+    def visibility_to_batches(self, anim, leaf_objs):
+        """ANIM_show/hide goes on the batches themselves, not on a host object.
+
+        XP2B writes those datarefs for an object, and the only object that can
+        sit above a bone chain is the mesh: a bone's children are bones, so an
+        Empty host would break the chain.  Every batch inside the block therefore
+        carries the command, written outermost block first and innermost last -
+        the order X-Plane reads them in, where the innermost command wins (that
+        is how `ANIM_hide 0 0` wrapping a per-part `ANIM_show 2 2` works).
+        """
+        placed = 0
+        for block in anim.blocks:
+            commands = [cmd for cmd in block.commands
+                        if cmd["kind"] in (CMD_SHOW, CMD_HIDE)
+                        and cmd.get("dataref")]
+            if not commands:
+                continue
+            for leaf in block.leaves:
+                name = leaf_objs[leaf] if leaf < len(leaf_objs) else None
+                ob = bpy.data.objects.get(name) if name else None
+                if ob is None:
+                    continue
+                for cmd in commands:
+                    dr = _add_dataref(ob, cmd["dataref"],
+                                      "show" if cmd["kind"] == CMD_SHOW
+                                      else "hide")
+                    dr.show_hide_v1 = cmd.get("v1", 0.0)
+                    dr.show_hide_v2 = cmd.get("v2", 0.0)
+                    placed += 1
+        return placed
 
     # -- main -------------------------------------------------------------
     def run(self):
@@ -628,21 +581,34 @@ class _Converter(object):
         # the rest pose a bone chain is laid out at: every dataref at its own
         # lowest keyed value, which is where the file's first key sits
         self.pose = {dref: lo for dref, (lo, hi) in anim.ranges().items()}
-        self.prepare_regions(anim)
+        self.prepare_tree(anim)
+        self.armature = self.build_armature(coll, base) if self.specs else None
+        if self.armature is not None:
+            for leaf, chain in anim.leaves.items():
+                if len(XM.chain_transforms(chain)) <= 1:
+                    continue        # a hinge: an Empty still carries it
+                for block in reversed(chain):
+                    if self.tips.get(block.index):
+                        self.leaf_anchor[leaf] = _Anchor(
+                            arm=self.armature, bone=self.tips[block.index])
+                        break
         anchors = {}
-        handled = set()
         for block in anim.blocks:
-            if block.index in handled:
-                continue            # a bone region built its whole subtree
             parent = None
             if block.parent is not None:
                 parent = anchors.get(block.parent.index)
-            if self.starts_region(block):
-                self.build_region(block, parent, coll, base, handled)
-                anchors[block.index] = parent
+            if self.armature is not None and self.tips.get(block.index):
+                anchors[block.index] = _Anchor(arm=self.armature,
+                                               bone=self.tips[block.index])
                 continue
             anchors[block.index] = self.empties_for_block(block, parent,
                                                           coll, base)
+
+        placed = self.visibility_to_batches(anim, leaf_objs)
+        if placed:
+            self.warn("%d ANIM_show/hide rule(s) were put on the batches "
+                      "themselves: XPlane2Blender writes them per object, and a "
+                      "bone chain can only carry them there" % placed)
 
         self._report_dropped_commands(obj8)
 

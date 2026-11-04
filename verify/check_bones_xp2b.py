@@ -85,6 +85,25 @@ def point_clouds(obj8, anim, position):
     return out
 
 
+def visible_points(obj8, anim, position):
+    """Every vertex the file draws at this pose, sorted - visibility included."""
+    pose = poses(anim, position)
+    out = []
+    for leaf_index, leaf in anim.leaves.items():
+        if not anim.visible_at(pose, leaf_index):
+            continue
+        matrix = anim.matrix_at(pose, leaf_index)
+        for index in obj8.leaves[leaf_index].indices:
+            if index >= len(obj8.vt):
+                continue
+            vertex = obj8.vt[index]
+            x, y, z = vertex.px, vertex.py, vertex.pz
+            out.append((round(matrix[0][0] * x + matrix[0][1] * y + matrix[0][2] * z + matrix[0][3], 2),
+                        round(matrix[1][0] * x + matrix[1][1] * y + matrix[1][2] * z + matrix[1][3], 2),
+                        round(matrix[2][0] * x + matrix[2][1] * y + matrix[2][2] * z + matrix[2][3], 2)))
+    return sorted(out)
+
+
 def centroid(points):
     if not points:
         return (0.0, 0.0, 0.0)
@@ -214,6 +233,34 @@ def main():
               % (position, bad))
     print("   worst vertex delta %.3f m" % worst)
     check(worst <= 0.1, "the exported motion differs from the file's")
+
+    print("\n4. visibility: ANIM_show/hide on the batches")
+    # every switch point, plus a hair either side: that is where a wrong
+    # innermost-wins order shows up
+    positions = set(POSITIONS)
+    for leaf in src_anim.leaves:
+        for t, _visible in XM.visibility_steps(src_anim, leaf,
+                                              src_anim.pose_ranges()):
+            positions.update([t, min(1.0, t + 1e-3), max(0.0, t - 1e-3)])
+    hidden = 0
+    worst = 0
+    for position in sorted(positions):
+        want = visible_points(src, src_anim, position)
+        got = visible_points(out, out_anim, position)
+        if len(want) != len(got):
+            check(False, "at %.3f: the file draws %d vertices, the export %d "
+                         "(a show/hide rule landed on the wrong part)"
+                  % (position, len(want), len(got)))
+            continue
+        if not want:
+            hidden += 1
+        delta = max((abs(p[i] - q[i]) for p, q in zip(want, got)
+                     for i in range(3)), default=0.0)
+        worst = max(worst, delta)
+        check(delta <= 0.1, "at %.3f: visible geometry is %.3f m off"
+              % (position, delta))
+    print("   %d pose(s) checked (%d of them with everything hidden), worst "
+          "%.3f m" % (len(positions), hidden, worst))
 
     print("\n%s" % ("FAILED: %d problem(s)" % len(fails) if fails else "OK"))
     return 1 if fails else 0

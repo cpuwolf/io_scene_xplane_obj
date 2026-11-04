@@ -664,6 +664,14 @@ def _bone_parent(ob, arm, bone_name):
     return ob
 
 
+def _unit(vector):
+    """A direction, normalised - Blender wants a unit axis for AXIS_ANGLE."""
+    length = math.sqrt(sum(value * value for value in vector))
+    if length < 1e-12:
+        return (0.0, 1.0, 0.0)
+    return tuple(value / length for value in vector)
+
+
 def _bone_name(block_index, order):
     return "b%03d_%d" % (block_index, order)
 
@@ -794,41 +802,49 @@ def bake_bone_tree(context, arm, specs, overrides=None):
         base = parent_rest.inverted() @ bone.matrix_local
 
         pose_bone = arm.pose.bones[bone_name]
-        pose_bone.rotation_mode = 'QUATERNION'
+        # AXIS_ANGLE, not QUATERNION: an OBJ8 rotation *is* an axis plus a keyed
+        # angle - `ANIM_rotate_begin x y z <dataref>` / `ANIM_rotate_key v angle`
+        # - so the bone's angle channel is the file's own angle and the axis
+        # channel is the file's own axis, one key per file key, and a sweep past
+        # 180 degrees needs no extra keys to keep its direction.
+        pose_bone.rotation_mode = 'AXIS_ANGLE'
         dataref = cmd.get("dataref")
+        rotates = cmd["kind"] in (XA.CMD_ROTATE, XA.CMD_ROTATE_KEYS)
         if dataref:
-            values = _subdivide(cmd, command_values(cmd))
+            values = command_values(cmd)
             frames = spread_frames(len(values))
         else:
             values = [None]
             frames = [1.0]
 
-        locations, quaternions, degrees = [], [], []
-        previous = None
+        locations, angles, degrees = [], [], []
         for value in values:
             pose = dict(overrides or {})
             if dataref and value is not None:
                 pose[dataref] = value
             m = Matrix([list(row) for row in
                         XA.to_bl(XA.cmd_matrix(cmd, pose))])
-            loc, quat, _scale = (base.inverted() @ m).decompose()
-            if previous is not None and quat.dot(previous) < 0.0:
-                quat.negate()           # keep the shortest arc between keys
-            previous = quat
+            loc, _quat, _scale = (base.inverted() @ m).decompose()
             locations.append(loc)
-            quaternions.append(quat)
-            degrees.append(round(_angle_at(cmd, value
-                                           if value is not None else 0.0), 6)
-                           if cmd["kind"] in (XA.CMD_ROTATE,
-                                              XA.CMD_ROTATE_KEYS) else None)
+            if rotates:
+                degrees.append(round(_angle_at(cmd, value
+                                               if value is not None else 0.0),
+                                     6))
+                angles.append(math.radians(degrees[-1]))
+            else:
+                degrees.append(None)
+                angles.append(0.0)
 
+        axis_bl = _unit(xp_to_bl(cmd.get("axis") or (0.0, 1.0, 0.0)))
         path = 'pose.bones["%s"]' % bone_name
-        for axis in range(3):
-            _write_curve(action, arm, path + ".location", axis, frames,
-                         [loc[axis] for loc in locations])
-        for axis in range(4):
-            _write_curve(action, arm, path + ".rotation_quaternion", axis,
-                         frames, [quat[axis] for quat in quaternions])
+        for index in range(3):
+            _write_curve(action, arm, path + ".location", index, frames,
+                         [loc[index] for loc in locations])
+        _write_curve(action, arm, path + ".rotation_axis_angle", 0, frames,
+                     angles)
+        for index in range(3):
+            _write_curve(action, arm, path + ".rotation_axis_angle",
+                         index + 1, frames, [axis_bl[index]] * len(frames))
 
         bone[PROP_DATAREF] = dataref or ""
         bone[PROP_ANIM_CMD] = cmd["kind"]

@@ -134,8 +134,9 @@ def main():
         parent_rest = (arm.data.bones[parent].matrix_local if parent
                        else Matrix.Identity(4))
         base = parent_rest.inverted() @ bone.matrix_local
-        values = (XM._subdivide(cmd, XM.command_values(cmd))
-                  if cmd.get("dataref") else [None])
+        # no subdivision: an AXIS_ANGLE bone keeps the file's own key count (a
+        # 1200-degree sweep is one angle channel, so it does not need extra keys)
+        values = (XM.command_values(cmd) if cmd.get("dataref") else [None])
         for frame, value in enumerate(values, start=1):
             pose = dict(pose0)
             if cmd.get("dataref") and value is not None:

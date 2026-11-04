@@ -47,15 +47,22 @@ input, so the time line *is* the dataref:
   and you can edit it there. A compound animation (a pitch translate, then a
   yoke-hide, then a roll rotate) is a chain, so each dataref keeps its own
   values and its own keys instead of being squashed into one;
-* **a cascade becomes a bone chain.** Two or more transform commands around one
-  batch (a yoke that slides in pitch and then swings in roll, a gear leg that
-  folds and steers) is not a hinge, it is a hierarchy, so it is imported as an
-  **armature with one bone per command**, parented in the order the file
-  multiplies them, bones carrying the dataref properties and the Action, and the
-  batch bone-parented to the innermost bone. One command keeps its Empty — a
-  hinge does not need a rig. OBJ8 has no skinning, so **no Armature modifier is
-  added**: the bones move the batch, the vertices stay the file's own, and an
-  untouched round trip is still byte identical;
+* **the file becomes one armature, bone for bone.** The `ANIM_begin` blocks are
+  a hierarchy (a translate, a hide, a show, a pivot plus a roll around one yoke),
+  so the importer builds **one armature for the whole `.obj`**, its bone tree a
+  copy of the block tree, one bone per transform command, named after its block
+  (`b181_1`). A batch hangs off the bone of its innermost block, so parts that
+  share a block share a bone. One command keeps its Empty — a hinge does not
+  need a rig. OBJ8 has no skinning, so **no Armature modifier is added**: the
+  bones move the batch, the vertices stay the file's own, and an untouched round
+  trip is still byte identical;
+* **every bone is `AXIS_ANGLE`.** An `ANIM_rotate_begin <x> <y> <z> <dataref>` is
+  an axis plus a keyed angle, so that is what the bone stores: the angle channel
+  carries the file's own degrees (one key per file key, no subdivision, and a
+  1200° trim wheel keeps turning instead of being folded to −120° by a
+  quaternion's short arc) and the axis channel carries the file's own axis as
+  `xp8_axis`. The degree is also keyed into `xp8_angle_deg`, so a
+  `ANIM_rotate_key 1 53.690156` can be read as 53.690156 in the bone panel;
 * each rig also gets an **Action** with **one keyframe per key the file has**,
   **key N on frame N** — a two-endpoint `ANIM_rotate` becomes two keyframes,
   a 15-key gauge table fifteen. That is XPlane2Blender's convention too (its
@@ -236,20 +243,20 @@ The conversion is lossy in a known way and says so: `LIGHT_*` primitives,
 commands, so they are dropped with a warning per file (the counts are also
 stored on the new collection as `xp2b_convert_warnings`).
 
-**When the bridge builds bones, and when it does not.** A bone chain needs the
-same two transform commands the importer asks for, *and* a subtree with no
-`ANIM_show/hide` in it: XPlane2Blender writes those for an object, and an
-object's dataref only reaches geometry parented under it — a bone's children are
-bones, so a hide on a bone would simply not be written.  Everything else keeps
-the Empty chain, and the conversion reports how many batches went each way.
+**One armature, and `ANIM_show/hide` on the batches.** The bridge builds the same
+single armature as the importer, from the same block tree, so a part that shares
+a block shares a bone (King Air C90B cockpit: 1 armature, 289 bones, 142 batches,
+where the previous cut made 134 armatures out of the same file).
 
-Measured through XPlane2Blender on four real aircraft objects (Aerolite 103
-`controls`, Baron 58 `B58_panelback`, Lancair `n844x_int1`, the fixture): every
-batch lands within 0.07 m of the file at five dataref positions, most of them
-exactly.  The 0.07 m is one linkage whose whole range is a few hundredths of a
-degree — once XP2B re-derives a bone's axis from the pose matrix, a rotation that
-small has no stable axis and comes back flattened.  A rotation that small is
-below what the eye or the sim resolves; a structural mistake shows up in metres.
+XPlane2Blender only writes `ANIM_show/hide` for an *object*, and a bone cannot
+hang under one, so those rules are written onto **every batch the block covers**
+instead of onto a host Empty: outermost block first, innermost last, which is the
+order X-Plane reads them in (the innermost command wins - that is how
+`ANIM_hide 0 0` wrapping a per-part `ANIM_show 1 1` works).  Nothing is left on
+an Empty, so the bone chain is never interrupted.
+
+Measured through XPlane2Blender on four aircraft objects and the fixture: every
+batch lands within 0.07 m of the file at five dataref positions, most exactly.
 
 Measured on Laminar's C90B exterior: `ANIM_*`/`ATTR_*` text comes out
 line-for-line identical apart from 1e-4-level float rounding, triangle counts
@@ -271,11 +278,12 @@ same composition order, same result.
   with the first material's textures.
 * Blender stores custom normals as int16 per axis, so regenerated normals can
   differ from the source by ~1e-4. Positions and UVs round-trip exactly.
-* The bridge is not exact on every file: Laminar's MD-82 `gear_main.obj` lands
-  up to 23.8 m from the source per batch, and does so with the object hierarchy
-  as well as with bones (measured on the code before this option existed), so it
-  is a pre-existing gap in the `ANIM_*` → XPlane2Blender conversion, not the
-  bone path. Re-export it from XP2B by hand until that is chased down.
+* The bridge is not exact on every file. King Air C90B `C90B_cockpit.obj` lands
+  up to 0.48 m off on 7 of 358 batches and MD-82 `gear_main.obj` up to 23.8 m;
+  both numbers are **identical** on the code from before the bone work (checked
+  by exporting the same file from `a398892`, whose scene had 134 armatures), so
+  this is a pre-existing gap in the `ANIM_*` → XPlane2Blender conversion and not
+  the bone tree. Re-export such a file from XP2B by hand until it is chased down.
 * A bone-rigged batch is **preview**: *From Blender (rigs)* samples the rig
   Empties, one key table each, so a cascade that lives on a bone chain keeps the
   animation the file came in with instead of being re-keyed from Blender. The
