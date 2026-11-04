@@ -105,6 +105,44 @@ def visible_points(obj8, anim, position):
     return sorted(out)
 
 
+OFFSET_CELL = 0.25      # buckets for the nearest-neighbour search, in metres
+
+
+def _worst_offset(points, other):
+    """(worst nearest-neighbour distance, points with no neighbour nearby).
+
+    Bucketed by OFFSET_CELL so the 20k-point cockpits do not cost a
+    quadratic scan; a point whose 27 neighbouring buckets are empty is counted
+    as lost instead of measured, because the distance to the truth is then
+    already past the tolerance.
+    """
+    buckets = {}
+    for point in other:
+        buckets.setdefault(_cell(point), []).append(point)
+    worst = 0.0
+    lost = 0
+    for point in points:
+        cell = _cell(point)
+        best = None
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for dz in (-1, 0, 1):
+                    for candidate in buckets.get((cell[0] + dx, cell[1] + dy,
+                                                  cell[2] + dz), ()):
+                        distance = math.dist(point, candidate)
+                        if best is None or distance < best:
+                            best = distance
+        if best is None:
+            lost += 1
+        else:
+            worst = max(worst, best)
+    return worst, lost
+
+
+def _cell(point):
+    return tuple(int(math.floor(value / OFFSET_CELL)) for value in point)
+
+
 def _nearest(point, points):
     """Distance from `point` to the closest point in `points` (0.0 if empty)."""
     if not points:
@@ -158,6 +196,7 @@ def main():
 
     keyed = 0
     for arm in armatures:
+        index = _keyframe_index(arm)
         bones = list(arm.data.bones)
         print("   %-22s %d bone(s): %s" % (arm.name, len(bones),
                                            [b.name for b in bones]))
@@ -172,7 +211,7 @@ def main():
                              dataref.show_hide_v1, dataref.show_hide_v2))
                     continue
                 path = 'bones["%s"].xplane.datarefs[%d].value' % (bone.name, i)
-                frames = _keyframes(arm, path)
+                frames = index.get(path, [])
                 print("      %s <- %-46s %d key(s)"
                       % (bone.name, dataref.path, len(frames)))
                 check(len(frames) >= 2,
@@ -213,42 +252,22 @@ def main():
     # centimetres.
     worst = 0
     for position in POSITIONS:
-        want = point_clouds(src, src_anim, position)
-        got = point_clouds(out, out_anim, position)
-        if len(want) != len(got):
-            check(False, "at %.2f: %d batches vs %d"
-                  % (position, len(want), len(got)))
-            continue
-        bad = 0
-        # the export re-orders batches (one block per bone), so pair by shape:
-        # same vertex count, nearest centroid.  Comparing sorted lists would
-        # pair two similar batches and report a delta that is not there.
-        for points, leaf in want:
-            centre = centroid(points)
-            best = None
-            for other, other_leaf in got:
-                if len(other) != len(points):
-                    continue
-                distance = (sum((centre[i] - centroid(other)[i]) ** 2
-                                for i in range(3))) ** 0.5
-                if best is None or distance < best[0]:
-                    best = (distance, other, other_leaf)
-            if best is None:
-                check(False, "at %.2f: source batch %d has no export batch "
-                             "with %d vertices" % (position, leaf, len(points)))
-                continue
-            delta = max((abs(p[i] - q[i])
-                         for p, q in zip(sorted(points), sorted(best[1]))
-                         for i in range(3)), default=0.0)
-            worst = max(worst, delta)
-            if delta > 0.1:
-                bad += 1
-                print("      at %.2f: source batch %d vs export batch %d, "
-                      "%.3f m" % (position, leaf, best[2], delta))
-        check(bad == 0, "at %.2f: %d batch(es) landed somewhere else"
-              % (position, bad))
+        # the export re-splits vertices and re-groups batches into one block per
+        # bone, so neither the vertex count nor the batch order survives: what
+        # has to hold is that every point the file draws has a point of the
+        # export at the same place.  Nearest neighbour, bucketed so a 20k-point
+        # cockpit stays fast.
+        want = [point for points, _leaf in point_clouds(src, src_anim, position)
+                for point in points]
+        got = [point for points, _leaf in point_clouds(out, out_anim, position)
+               for point in points]
+        delta, lost = _worst_offset(want, got)
+        worst = max(worst, delta)
+        check(lost == 0, "at %.2f: %d vertex(es) have no export vertex within "
+                         "%.2f m" % (position, lost, OFFSET_CELL))
+        check(delta <= 0.1, "at %.2f: a vertex sits %.3f m from where the file "
+                            "draws it" % (position, delta))
     print("   worst vertex delta %.3f m" % worst)
-    check(worst <= 0.1, "the exported motion differs from the file's")
 
     print("\n4. visibility: ANIM_show/hide on the batches")
     # every switch point, plus a hair either side: that is where a wrong
@@ -293,12 +312,16 @@ def main():
     return 1 if fails else 0
 
 
-def _keyframes(action_owner, data_path):
-    """Frames a data path is keyed on, on 4.2 and on 5.x layered actions."""
+def _keyframe_index(action_owner):
+    """{data path: keyed frames}, read once per armature.
+
+    A330 has 2207 bones; looking each one up in a linear scan of ~6600 curves
+    turns a minute of work into ten minutes of nothing.
+    """
     data = action_owner.data if action_owner.type == 'ARMATURE' else None
     animation = data.animation_data if data is not None else None
     if animation is None or animation.action is None:
-        return []
+        return {}
     action = animation.action
     curves = getattr(action, "fcurves", None)
     if curves is None:
@@ -307,10 +330,13 @@ def _keyframes(action_owner, data_path):
             for strip in layer.strips:
                 for bag in strip.channelbags:
                     curves.extend(bag.fcurves)
-    for curve in curves:
-        if curve.data_path == data_path:
-            return [kp.co[0] for kp in curve.keyframe_points]
-    return []
+    return {curve.data_path: [kp.co[0] for kp in curve.keyframe_points]
+            for curve in curves}
+
+
+def _keyframes(action_owner, data_path):
+    """Frames a data path is keyed on, on 4.2 and on 5.x layered actions."""
+    return _keyframe_index(action_owner).get(data_path, [])
 
 
 sys.exit(main())
