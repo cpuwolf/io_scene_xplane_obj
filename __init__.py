@@ -98,35 +98,6 @@ class IMPORT_OT_xplane_obj(bpy.types.Operator, ImportHelper):
         description="Import every .obj sitting next to the selected file",
         default=False)
 
-    place_parts: BoolProperty(
-        name="Animate and place parts",
-        description="Batches inside an ANIM_begin/ANIM_end block are moved to "
-                    "the attitude their datarefs select, and get a rig Empty "
-                    "so the animation can be scrubbed. Export ignores the rig, "
-                    "so the file is unchanged unless you export from Blender",
-        default=True)
-
-    anim_position: FloatProperty(
-        name="Animation at",
-        description="Where to look in the animation: 0 is every dataref at its "
-                    "lowest keyed value, 1 at its highest. This sets the pose "
-                    "of the parts and the time-line position when the Actions "
-                    "are baked",
-        default=0.0, min=0.0, max=1.0, subtype='FACTOR')
-
-    anim_overrides: StringProperty(
-        name="Pin datarefs",
-        description="Keep a dataref fixed while the rest of the animation "
-                    "sweeps, e.g. "
-                    "sim/flightmodel2/engines/prop_rotation_angle_deg[0]=0",
-        default="")
-
-    bake_actions: BoolProperty(
-        name="Bake Actions",
-        description="Write the animation into an Action per part, so dragging "
-                    "the time line (one key per frame) plays it",
-        default=True)
-
     def execute(self, context):
         path = self.filepath
         if not os.path.isfile(path):
@@ -155,10 +126,7 @@ class IMPORT_OT_xplane_obj(bpy.types.Operator, ImportHelper):
             try:
                 header = XM.import_file(context, p, into_collection=coll,
                                         report=self.report,
-                                        place_parts=self.place_parts,
-                                        anim_position=self.anim_position,
-                                        anim_overrides=self.anim_overrides,
-                                        bake_actions=self.bake_actions)
+                                        preview_rig=False)
             except (ValueError, OSError) as exc:
                 self.report({'ERROR'}, "%s: %s" % (os.path.basename(p), exc))
                 continue
@@ -651,7 +619,13 @@ class VIEW3D_PT_xplane_obj(bpy.types.Panel):
 
         xbox = layout.box()
         xbox.label(text="author with XPlane2Blender", icon='MODIFIER')
-        xbox.operator("object.xp8_to_xp2b", icon='DUPLICATE')
+        done = header.get("xp2b_collection")
+        if done and bpy.data.collections.get(done) is not None:
+            # import already did it; the button is only for a file that arrived
+            # before XPlane2Blender was enabled, or whose collection was deleted
+            xbox.label(text="converted: %s" % done, icon='CHECKMARK')
+        else:
+            xbox.operator("object.xp8_to_xp2b", icon='DUPLICATE')
         if header.get("xp2b_convert_warnings"):
             xbox.label(text="last conversion had warnings (hover the button)",
                        icon='ERROR')

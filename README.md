@@ -24,6 +24,10 @@ longer needs one of its own.
 
 ## What it does
 
+* the import lands **as** the XPlane2Blender collection — one collection, one
+  armature, one Action per file, built in place rather than in a preview scene
+  that a second pass then rebuilds. There is no preview rig to ignore and no
+  leftover collection holding a header;
 * one `.obj` becomes a header Empty plus one mesh per geometry command, so a
   21-part fuselage is 21 objects you can hide, edit and join;
 * `TEXTURE` / `TEXTURE_LIT` / `TEXTURE_NORMAL` become a Principled material
@@ -203,11 +207,11 @@ aircraft's geometry exported this way would put the whole aircraft into the terr
 
 ## Where the X-Plane data lives
 
-One `.obj` becomes one Empty plus one mesh per geometry command. The animation
-exists twice on purpose: as **text** in custom properties on the Empty (the
-ground truth that is written back), and as an **Action on a rig Empty** per
-animated batch (so you can see and edit it). Nothing you do to the meshes can
-damage the text.
+One `.obj` becomes one header Empty plus one mesh per geometry command. The
+header carries the file as **text** in custom properties (the ground truth the
+standalone exporter writes back), and the animation you edit is the
+XPlane2Blender armature: one bone per ANIM block, keyed from the file's own key
+tables. Nothing you do to the meshes can damage the text.
 
 | property | on | contents |
 | --- | --- | --- |
@@ -218,7 +222,8 @@ damage the text.
 | `xp8_leaf_objs` | Empty | batch index → object name |
 | `xp8_fingerprints`, `xp8_cmd_hash` | Empty | what the "was anything changed?" test compares |
 | `xp8_leaf` | mesh | which batch it is |
-| `xp8_leaf`, `xp8_dataref`, `xp8_anim_range`, `xp8_anim_datarefs`, `xp8_anim_vis`, `xp8_anim_action`, `xp8_anim_keys` | rig Empty | the batch it drives, its driving dataref and value range, the visibility commands, the baked Action and the key positions it was built from |
+| `xp8_anim_vis` | mesh | the `ANIM_show/hide` rules of its block, in file order |
+| `xp8_dataref`, `xp8_anim_range`, `xp8_anim_datarefs`, `xp8_anim_action`, `xp8_anim_keys` | rig Empty | only built by `import_file(preview_rig=True)` — the preview rig the verify scripts use; the UI import goes straight to XPlane2Blender's armature |
 | `xp8_placement` | mesh | legacy: a static `ANIM_trans` offset, still honoured on export |
 | `xp8_vt` | mesh attribute | source `VT` row index per vertex, so untouched rows keep their exact text |
 

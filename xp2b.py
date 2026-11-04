@@ -314,6 +314,35 @@ class _Converter(object):
 
     # -- nested animation: one bone per transform command -------------------
 
+    def _own_collection(self, base):
+        """The collection the import already put this file in, made exportable.
+
+        Import leaves the meshes next to the header, so converting in place
+        gives one collection per file.  Building a second one left the first
+        behind as an empty shell with the header in it, which reads as two
+        scenes for one object.  A folder import shares one collection between
+        several files, and the scene's master collection cannot be made
+        exportable - both fall back to a new collection.
+        """
+        master = self.scene.collection
+        for coll in list(self.header.users_collection):
+            if coll == master or coll.xplane.is_exportable_collection:
+                continue
+            headers = [ob for ob in coll.objects if ob.type == 'EMPTY'
+                       and ob.get(XM.PROP_ROLE) == XM.ROLE_HEADER]
+            if len(headers) > 1:
+                continue
+            # XP2B exports every object in an exportable collection, so the
+            # header (which only holds the file's text) moves out of it
+            for holder in list(self.header.users_collection):
+                holder.objects.unlink(self.header)
+            master.objects.link(self.header)
+            coll.name = base + "_xp2b"
+            return coll
+        coll = _new_collection(base + "_xp2b")
+        master.children.link(coll)
+        return coll
+
     def prepare_tree(self, anim):
         """Which blocks carry a bone, and which batch hangs where.
 
@@ -483,8 +512,7 @@ class _Converter(object):
 
         src = header.get(XM.PROP_SOURCE, "")
         base = os.path.splitext(os.path.basename(src))[0] or header.name
-        coll = _new_collection(base + "_xp2b")
-        self.scene.collection.children.link(coll)
+        coll = self._own_collection(base)
         coll.xplane.is_exportable_collection = True
         coll.xplane.layer.name = base
         coll.xplane.layer.export_type = "aircraft"
@@ -773,7 +801,17 @@ class _Converter(object):
         else:
             lum = nums[0] if nums else None
 
-        pairs = [("cockpit_feature", "panel")]
+        # XPlane2Blender refuses a panel material that also overrides the light
+        # level ("Must not override light level") and writes no file at all, so
+        # the panel wins and the override is reported - the panel's lighting
+        # comes from the panel texture, the override has no meaning there.
+        for slot in ob.material_slots:
+            if slot.material is not None and slot.material.xplane.lightLevel:
+                self.warn("%s: ATTR_light_level dropped - the batch draws into "
+                          "the cockpit panel, and XPlane2Blender rejects a panel "
+                          "material with a light-level override" % ob.name)
+                break
+        pairs = [("cockpit_feature", "panel"), ("lightLevel", False)]
         if region is not None:
             # the file counts regions from 0, XPlane2Blender's enum from 1
             pairs.append(("cockpit_region",
@@ -956,6 +994,9 @@ def convert(context, headers, report=None):
         if report is not None:
             for w in warnings:
                 report({'WARNING'}, w)
+        # the header remembers where it went, so the panel can say "already
+        # converted" instead of offering the step a second time
+        header["xp2b_collection"] = coll.name
         if warnings:
             coll["xp2b_convert_warnings"] = json.dumps(warnings)
             header["xp2b_convert_warnings"] = len(warnings)

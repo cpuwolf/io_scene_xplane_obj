@@ -716,6 +716,7 @@ def bone_tree(anim, pose, all_blocks=False):
     specs = []
     cumulative = {}     # block index -> matrix up to its last command
     tips = {}           # block index -> its innermost bone (or its parent's)
+    tip_head = {}       # block index -> where that innermost bone sits
     for block in anim.blocks:
         if block.index not in wanted:
             continue
@@ -738,20 +739,35 @@ def bone_tree(anim, pose, all_blocks=False):
             # it has no transformation to show.
             if not all_blocks:
                 continue
+            # An anchor bone sits on its parent's head, NOT on the chain's
+            # accumulated translation.  A bone's rest offset is a rigid part of
+            # the pose stack, and an animated parent cannot cancel it because
+            # this bone has no keyed pose of its own: laying it at the parent's
+            # posed position applied that offset twice (King Air C90B yoke:
+            # ANIM_trans to the pivot, then hide, then show, then the roll
+            # rotation - the yoke sat 2.35 m behind where the file draws it).
+            head = Vector((0.0, 0.0, 0.0))
+            ancestor = block.parent
+            while ancestor is not None:
+                if ancestor.index in tip_head:
+                    head = tip_head[ancestor.index].copy()
+                    break
+                ancestor = ancestor.parent
             name = _bone_name(block.index, 0)
-            specs.append((name, cum.translation.copy(), None, parent_bone,
-                          block.index))
+            specs.append((name, head, None, parent_bone, block.index))
             cumulative[block.index] = cum
             tips[block.index] = name
+            tip_head[block.index] = head
             continue
         for order, cmd in enumerate(transforms):
             m = Matrix([list(row) for row in
                         XA.to_bl(XA.cmd_matrix(cmd, pose))])
             name = _bone_name(block.index, order)
-            specs.append((name, cum.translation.copy(), cmd, parent_bone,
-                          block.index))
+            head = cum.translation.copy()
+            specs.append((name, head, cmd, parent_bone, block.index))
             cum = cum @ m
             parent_bone = name
+            tip_head[block.index] = head
         cumulative[block.index] = cum
         tips[block.index] = parent_bone
     return specs, tips
@@ -1072,7 +1088,7 @@ def _chain_visibility(chain):
 
 def import_file(context, path, into_collection=None, report=None,
                 place_parts=True, anim_position=0.0, anim_overrides="",
-                bake_actions=True):
+                bake_actions=True, preview_rig=True):
     """Import one .obj file.  Returns the header Empty (or None on failure).
 
     With `place_parts` every batch inside an ANIM_begin/ANIM_end block gets a
@@ -1084,7 +1100,10 @@ def import_file(context, path, into_collection=None, report=None,
     Blender.
 
     The rigs are preview only: `export_matrix` skips them, so an untouched
-    import is still written back byte for byte.
+    import is still written back byte for byte.  `preview_rig=False` builds
+    none of them - the caller is about to convert the file to an XPlane2Blender
+    scene, which builds its own armature, and two rigs of the same animation in
+    one .blend is one rig too many.
     """
     path = os.path.abspath(path)
     with open(path, "rb") as f:
@@ -1128,7 +1147,8 @@ def import_file(context, path, into_collection=None, report=None,
     # one armature for the whole file, its bones mirroring the ANIM block tree:
     # a batch hangs off the bone of its innermost block, so parts that share a
     # block share a bone - which is what the file does
-    bone_specs, bone_tips = (bone_tree(anim, pose) if anim is not None
+    bone_specs, bone_tips = (bone_tree(anim, pose)
+                             if anim is not None and preview_rig
                              else ([], {}))
     bone_arm = None
     leaf_bone = {}
@@ -1158,6 +1178,8 @@ def import_file(context, path, into_collection=None, report=None,
         if bone:
             # a cascade: the batch rides the file's own block hierarchy
             _bone_parent(ob, bone_arm, bone)
+        elif not preview_rig:
+            pass                    # flat on the header; the conversion re-hangs it
         else:
             parent = header
             for n, cmd in enumerate(commands):
@@ -1182,12 +1204,12 @@ def import_file(context, path, into_collection=None, report=None,
             # as "export the animation only" and drops the geometry.
             ob[PROP_ANIM_VIS] = json.dumps(_chain_visibility(chain))
         leaf_objs[leaf_index] = ob.name
-    if rigs_made and bake_actions:
+    if rigs_made and bake_actions and preview_rig:
         for rig, cmd in rigs_made:
             bake_command_action(rig, cmd, overrides)
-    if bone_arm is not None and bake_actions:
+    if bone_arm is not None and bake_actions and preview_rig:
         bake_bone_tree(context, bone_arm, bone_specs, overrides)
-    if (rigs_made or bone_arm is not None) and bake_actions:
+    if (rigs_made or bone_arm is not None) and bake_actions and preview_rig:
         # the animated properties are now owned by the Actions
         if anim.leaves:
             # the time line is the key table: one key per frame, so the scene
