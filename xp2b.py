@@ -53,9 +53,14 @@ from .xpanim import CMD_ROTATE, CMD_ROTATE_KEYS, CMD_SHOW, CMD_HIDE, \
 XP2B_PROP = "xplane"
 
 _UNSUPPORTED_MANIP = {
+    # XP2B derives a drag-rotate's pivot, axis and angle ends from a *rotation*
+    # bone that must sit above the mesh, and a detent one additionally from a
+    # translation bone.  In the files here (C90B cockpit throttles) the rotation
+    # lives in a sibling block, so XP2B rejects the object outright ("Requirements
+    # for Drag Rotate manipulator are not met") and writes no file at all - worse
+    # than leaving the manipulator reported.
     "ATTR_manip_drag_rotate", "ATTR_manip_drag_rotate_detent",
-    "ATTR_manip_drag_axis_pix", "ATTR_manip_axis_knob",
-    "ATTR_manip_axis_switch_up_down", "ATTR_manip_axis_switch_left_right",
+    "ATTR_manip_drag_axis_pix",
 }
 
 #: The three panel spellings, and the XPlane2Blender *Panel Texture Mode* each
@@ -235,6 +240,28 @@ def apply_manipulator(ob, state, warnings):
             manip.v1, manip.v2 = float(args[4]), float(args[5])
             manip.dataref1 = args[6]
             manip.tooltip = _tail(args, 7)
+            return True
+        if kw == "ATTR_manip_command_axis":
+            manip.type = "command_axis"
+            manip.cursor = _cursor(args[0])
+            manip.dx, manip.dy, manip.dz = (float(a) for a in args[1:4])
+            manip.positive_command = args[4]
+            manip.negative_command = args[5]
+            manip.tooltip = _tail(args, 6)
+            return True
+        if kw in ("ATTR_manip_axis_knob", "ATTR_manip_axis_switch_up_down",
+                  "ATTR_manip_axis_switch_left_right"):
+            # cursor, v1, v2, click step, hold step, dataref, tooltip
+            manip.type = {"ATTR_manip_axis_knob": "axis_knob",
+                          "ATTR_manip_axis_switch_up_down":
+                              "axis_switch_up_down",
+                          "ATTR_manip_axis_switch_left_right":
+                              "axis_switch_left_right"}[kw]
+            manip.cursor = _cursor(args[0])
+            manip.v1, manip.v2 = float(args[1]), float(args[2])
+            manip.click_step, manip.hold_step = float(args[3]), float(args[4])
+            manip.dataref1 = args[5]
+            manip.tooltip = _tail(args, 6)
             return True
         if kw == "ATTR_manip_drag_xy":
             manip.type = "drag_xy"
@@ -511,6 +538,10 @@ class _Converter(object):
 
         src = header.get(XM.PROP_SOURCE, "")
         base = os.path.splitext(os.path.basename(src))[0] or header.name
+        # merge identical output vertices: without it XP2B writes one VT per
+        # triangle corner, so a cockpit with 14,477 shared vertices exports
+        # 44,070 of them (the index count) and three times the file size
+        self.scene.xplane.optimize = True
         coll = self._own_collection(base)
         coll.xplane.is_exportable_collection = True
         coll.xplane.layer.name = base
@@ -606,9 +637,10 @@ class _Converter(object):
             self._apply_shade_and_shiny(ob, state)
             self._apply_surface_state(ob, state)
             self._apply_cockpit_state(ob, state, coll)
-            self._apply_detent_ranges(ob, state)
             if apply_manipulator(ob, state, self.warnings):
                 coll.xplane.layer.export_type = "cockpit"
+            self._apply_detent_ranges(ob, state)
+            self._apply_manip_wheel(ob, state)
             self._check_state(state, ob.name)
             made += 1
 
@@ -749,6 +781,25 @@ class _Converter(object):
                     self._material_set(ob, [("poly_os", value)], "poly_os")
                 elif kw == "ATTR_no_poly_os":
                     self._material_set(ob, [("poly_os", 0)], "poly_os")
+
+    def _apply_manip_wheel(self, ob, state):
+        """ATTR_manip_wheel <delta> -> the manipulator's mouse-wheel rate.
+
+        A modifier line, not a manipulator: it belongs to the ATTR_manip_* line
+        of the same batch.  ATTR_manip_keyframe needs no conversion - XP2B
+        writes those from the rotation keys it regenerates.
+        """
+        for cat, raws in state or []:
+            if cat != "manip_wheel":
+                continue
+            for raw in raws:
+                words = raw.split()
+                try:
+                    delta = float(words[1])
+                except (IndexError, ValueError):
+                    self.warn("%s: ATTR_manip_wheel needs a number" % ob.name)
+                    continue
+                ob.xplane.manip.wheel_delta = delta
 
     def _apply_detent_ranges(self, ob, state):
         """ATTR_axis_detent_range <start> <end> <height> -> the manipulator's
@@ -999,7 +1050,7 @@ class _Converter(object):
         # file comes back looking fine with a state line silently missing
         keep = {"manip", "draw", "light_level", "camera", "shiny", "shade",
                 "blend", "shadow", "poly_os", "cockpit", "detent_range",
-                "detent_axis"}
+                "detent_axis", "manip_wheel", "manip_keyframe"}
         for cat, raws in state or []:
             if cat in keep:
                 continue

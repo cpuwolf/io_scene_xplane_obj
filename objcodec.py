@@ -75,6 +75,10 @@ state_category_map = {
     "ATTR_axis_detent_range": "detent_range",   # repeatable
     "ATTR_shade_flat": "shade",
     "ATTR_shade_smooth": "shade",
+    # these two ride *with* a manipulator instead of replacing it: they were
+    # landing in the "manip" bucket and wiping the ATTR_manip_* line before it
+    "ATTR_manip_wheel": "manip_wheel",
+    "ATTR_manip_keyframe": "manip_keyframe",
     "ATTR_cull": "cull",
     "ATTR_no_cull": "cull",
     "ATTR_depth": "depth",
@@ -93,7 +97,7 @@ STATE_ORDER = [
 def state_category(kw):
     """Attribute state category for a keyword, or None if it is not state."""
     if kw.startswith("ATTR_manip_"):
-        return "manip"
+        return state_category_map.get(kw, "manip")
     return state_category_map.get(kw)
 
 
@@ -305,7 +309,7 @@ def parse_text(text):
 
         cat = state_category(kw)
         if cat is not None:
-            if cat == "detent_range":
+            if cat in ("detent_range", "manip_keyframe"):
                 state.setdefault(cat, []).append(stripped)
             elif cat == "manip":
                 # ATTR_axis_detent_range lines belong to the manipulator that
@@ -313,6 +317,7 @@ def parse_text(text):
                 # manipulator starts a new list (C90B cockpit: 30 ranges piled
                 # onto one object instead of 3 on each of ten)
                 state.pop("detent_range", None)
+                state.pop("manip_keyframe", None)
                 state[cat] = [stripped]
             else:
                 if cat not in state:
