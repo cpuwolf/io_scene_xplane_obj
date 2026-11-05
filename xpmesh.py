@@ -426,6 +426,129 @@ def _load_image(path, non_color=False):
     return img
 
 
+def texture_map_usages(obj8):
+    """``TEXTURE_MAP`` as {usage: filename} -- normal / material_gloss / gloss.
+
+    X-Plane 12.1 spells a material out over two files instead of one, and the
+    blue channel of the ``normal`` file is then *not* a vector component: a
+    blue of 0 must not reach Blender as z = -1, or every surface lights
+    inside-out.
+    """
+    out = {}
+    for words in obj8.global_values("TEXTURE_MAP"):
+        if len(words) >= 2 and words[0] not in out:
+            out[words[0]] = words[1]
+    return out
+
+
+def _material_image_node(nt, img, loc, label):
+    n = nt.nodes.new('ShaderNodeTexImage')
+    n.image = img
+    n.location = loc
+    n.name = n.label = label
+    return n
+
+
+def wire_combo_material(nt, bsdf, obj8, obj_dir, raw_nrm, x, y=-360):
+    """Wire X-Plane's combo map into the Principled BSDF; return its image.
+
+    What X-Plane calls a normal map is the whole material standing in one
+    texture, so linking it straight into Blender is wrong as soon as there is
+    more than a normal in it:
+
+        R,G   tangent-space normal X,Y.  Nothing else: the file does not store
+              a Z when the channels are taken by material data, so rebuild it
+              as 1.0 (the Normal Map node renormalises, which is the standard
+              tangent-space reconstruction).
+        B     base reflectance / metalness -- **only** in metalness mode
+        A     gloss, which is Blender's roughness *inverted*
+
+    Which of those is live depends on directives, not on the file name:
+
+        TEXTURE_NORMAL f + NORMAL_METALNESS    R,G normal, B metalness, A gloss
+        TEXTURE_MAP normal f                   f is R,G only, B and A unused
+        TEXTURE_MAP material_gloss g           f R,G normal, g: R metal, G gloss
+        TEXTURE_MAP gloss g                    g: R is the gloss, G ignored
+
+    A ``TEXTURE_NORMAL`` with no ``NORMAL_METALNESS`` is an XP10/11 file: RGB
+    is the complete vector and the alpha is *specular strength*, not gloss, so
+    that one keeps the plain image -> Normal Map link and no channel split.
+
+    91% of the Laminar OBJs (390 of 427 that have a normal map) are metalness
+    mode, so this is the normal case, not an exotic one.  Non-color is not
+    optional: an sRGB decode on a vector texture distorts the math.
+    """
+    maps = texture_map_usages(obj8)
+    metalness = obj8.global_value("NORMAL_METALNESS") is not None
+
+    nrm_name = maps.get("normal") or raw_nrm
+    nrm = resolve_texture(obj_dir, nrm_name)
+    if not nrm:
+        return None
+    img = _load_image(nrm, non_color=True)
+    if img is None:
+        return None
+
+    tex = _material_image_node(nt, img, (x, y), "XP normal (R,G)")
+    nm = nt.nodes.new('ShaderNodeNormalMap')
+    metal = gloss = None
+    if metalness or "normal" in maps:
+        sep = nt.nodes.new('ShaderNodeSeparateColor')
+        sep.mode = 'RGB'
+        sep.location = (x + 220, y)
+        sep.name = sep.label = "XP normal split"
+        nt.links.new(tex.outputs['Color'], sep.inputs['Color'])
+
+        comb = nt.nodes.new('ShaderNodeCombineColor')
+        comb.mode = 'RGB'
+        comb.location = (x + 400, y + 60)
+        comb.name = comb.label = "XP normal Z=1"
+        nt.links.new(sep.outputs['Red'], comb.inputs['Red'])
+        nt.links.new(sep.outputs['Green'], comb.inputs['Green'])
+        comb.inputs['Blue'].default_value = 1.0
+
+        nm.location = (x + 580, y + 60)
+        nt.links.new(comb.outputs['Color'], nm.inputs['Color'])
+        if metalness and "material_gloss" not in maps:
+            metal = sep.outputs['Blue']
+            gloss = tex.outputs['Alpha']      # Separate Color has no alpha
+    else:
+        nm.location = (x + 280, y)
+        nt.links.new(tex.outputs['Color'], nm.inputs['Color'])
+    nt.links.new(nm.outputs['Normal'], bsdf.inputs['Normal'])
+
+    # The separated material file (XP12.1), when the object carries one.
+    mat_name = maps.get("material_gloss") or maps.get("gloss")
+    mat_path = resolve_texture(obj_dir, mat_name)
+    if mat_path:
+        mimg = _load_image(mat_path, non_color=True)
+        if mimg is not None:
+            mtex = _material_image_node(nt, mimg, (x, y - 280),
+                                        "XP material (R metal, G gloss)")
+            if "material_gloss" in maps:
+                msep = nt.nodes.new('ShaderNodeSeparateColor')
+                msep.mode = 'RGB'
+                msep.location = (x + 220, y - 280)
+                msep.name = msep.label = "XP material split"
+                nt.links.new(mtex.outputs['Color'], msep.inputs['Color'])
+                metal = msep.outputs['Red']
+                gloss = msep.outputs['Green']
+            else:
+                metal = None                       # `gloss` usage has no metal
+                gloss = mtex.outputs['Red']
+
+    if metal is not None and 'Metallic' in bsdf.inputs:
+        nt.links.new(metal, bsdf.inputs['Metallic'])
+    if gloss is not None and 'Roughness' in bsdf.inputs:
+        inv = nt.nodes.new('ShaderNodeInvert')
+        inv.location = (x + 400, y - 280)
+        inv.name = inv.label = "XP gloss -> roughness"
+        inv.inputs['Fac'].default_value = 1.0
+        nt.links.new(gloss, inv.inputs['Color'])
+        nt.links.new(inv.outputs['Color'], bsdf.inputs['Roughness'])
+    return img
+
+
 def build_material(obj8, obj_dir, name):
     """A Principled material wired from the file's TEXTURE / _LIT / _NORMAL."""
     mat = bpy.data.materials.new(name)
@@ -475,17 +598,7 @@ def build_material(obj8, obj_dir, name):
             except KeyError:
                 pass
 
-    nrm = resolve_texture(obj_dir, raw_nrm)
-    if nrm:
-        img = _load_image(nrm, non_color=True)
-        if img:
-            n = nt.nodes.new('ShaderNodeTexImage')
-            n.image = img
-            n.location = (x, -360)
-            nm = nt.nodes.new('ShaderNodeNormalMap')
-            nm.location = (x + 280, -360)
-            nt.links.new(n.outputs['Color'], nm.inputs['Color'])
-            nt.links.new(nm.outputs['Normal'], bsdf.inputs['Normal'])
+    wire_combo_material(nt, bsdf, obj8, obj_dir, raw_nrm, x)
 
     # Blend mode: BLEND_GLASS is real transparency (windows), everything else
     # keeps dithering so alpha cut-outs behave like X-Plane's alpha test.
@@ -528,18 +641,26 @@ def material_textures(mat):
     if bsdf is None:
         return out
 
-    def image_into(socket):
+    def image_into(socket, depth=0):
+        """First image texture feeding a socket, through any node chain.
+
+        The normal input is not an image -> Normal Map pair any more: X-Plane's
+        combo map goes image -> Separate Color -> Combine Color -> Normal Map,
+        so a fixed two-step walk stops finding the file and a node-graph edit
+        silently stops being written out.
+        """
+        if socket is None or depth > 8:
+            return None
         for link in nt.links:
-            if link.to_socket == socket:
-                n = link.from_node
-                if n.bl_idname == 'ShaderNodeTexImage' and n.image:
-                    return n.image
-                if n.bl_idname == 'ShaderNodeNormalMap':
-                    for l2 in nt.links:
-                        if l2.to_socket == n.inputs['Color']:
-                            n2 = l2.from_node
-                            if n2.bl_idname == 'ShaderNodeTexImage' and n2.image:
-                                return n2.image
+            if link.to_socket != socket:
+                continue
+            n = link.from_node
+            if n.bl_idname == 'ShaderNodeTexImage' and n.image:
+                return n.image
+            for inp in n.inputs:
+                found = image_into(inp, depth + 1)
+                if found:
+                    return found
         return None
 
     for key, socket in (("TEXTURE", bsdf.inputs.get('Base Color')),

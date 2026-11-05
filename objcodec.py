@@ -178,6 +178,19 @@ class Obj8(object):
                 return tuple(w[1:])
         return None
 
+    def global_values(self, keyword):
+        """Every matching global line's argument words, in file order.
+
+        ``TEXTURE_MAP`` repeats (one per usage), so the single-value helper is
+        not enough to read a file's material setup.
+        """
+        out = []
+        for line in self.globals:
+            w = line.split()
+            if w and w[0] == keyword:
+                out.append(tuple(w[1:]))
+        return out
+
     def triangles(self):
         return [lf for lf in self.leaves if lf.kind == "TRIS"]
 

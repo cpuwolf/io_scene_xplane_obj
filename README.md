@@ -47,6 +47,13 @@ the add-on registers a file handler for `.obj`.
 * `TEXTURE` / `TEXTURE_LIT` / `TEXTURE_NORMAL` become a Principled material
   (base colour, emission, normal map), and the original *relative* texture paths
   (`../../objects/foo/bar.png`) are written back out unchanged;
+* the normal map is wired as the **combo map it actually is**, not as a plain
+  normal map: `R,G` go into a Normal Map node behind a rebuilt `Z = 1`, the blue
+  channel becomes Metallic (metalness mode only, i.e. `NORMAL_METALNESS`), and
+  the alpha — gloss — is inverted into Roughness. `TEXTURE_MAP normal` /
+  `material_gloss` (XP 12.1) is read the same way from its two files. A
+  `TEXTURE_NORMAL` with no `NORMAL_METALNESS` is an XP10/11 file whose RGB is
+  the whole vector, so that one stays a plain link;
 * every `VT` row's authored normal is kept as a custom split normal — X-Plane
   stores lighting normals per vertex and they are not the averaged face normals
   Blender would otherwise compute;

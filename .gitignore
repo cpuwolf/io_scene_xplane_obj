@@ -14,3 +14,4 @@ dist/
 # scratch output from the verify scripts
 verify/_roundtrip.obj
 verify/*.blend1
+verify/tmp/

@@ -20,7 +20,9 @@ into a normal Blender scene, and puts it back together on export:
 
   * the TEXTURE / TEXTURE_LIT / TEXTURE_NORMAL maps become a Principled
     material (base colour, emission, normal map), with the original relative
-    paths remembered so a `../../objects/x.png` name survives the trip;
+    paths remembered so a `../../objects/x.png` name survives the trip.  The
+    normal map is split instead of linked straight in: X-Plane packs normal XY,
+    metalness and gloss into one texture (see `xpmesh.wire_combo_material`);
   * every VT row becomes a vertex with its authored normal attached as a
     custom split normal -- X-Plane stores lighting normals per vertex and they
     are NOT the averaged face normals Blender would invent;
