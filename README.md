@@ -54,6 +54,10 @@ the add-on registers a file handler for `.obj`.
   `material_gloss` (XP 12.1) is read the same way from its two files. A
   `TEXTURE_NORMAL` with no `NORMAL_METALNESS` is an XP10/11 file whose RGB is
   the whole vector, so that one stays a plain link;
+* a trailing `#` comment on a data or command line (`VT ... # 12`, which
+  add-on exporters write and the spec does not mention) is stripped for the
+  numbers and kept in the raw line, so a file the sim loads also imports here
+  and still writes back byte for byte;
 * every `VT` row's authored normal is kept as a custom split normal — X-Plane
   stores lighting normals per vertex and they are not the averaged face normals
   Blender would otherwise compute;

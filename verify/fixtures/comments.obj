@@ -1,0 +1,24 @@
+I
+800
+OBJ
+
+# A file laid out by an add-on exporter that appends a `#` comment to every
+# record: vertex indices after each VT row, a note on TRIS.  The tail is not in
+# the OBJ8 spec but the sim ignores it, so the importer has to as well.
+TEXTURE comments.png
+TEXTURE_LIT comments_LIT.png
+TEXTURE_NORMAL comments_NM.png
+NORMAL_METALNESS
+GLOBAL_specular 1
+POINT_COUNTS 4 0 0 6
+
+VT -1 0 -1 0 1 0 0 1 # 0
+VT 1 0 -1 0 1 0 1 1 # 1
+VT 1 0 1 0 1 0 1 0 # 2
+VT -1 0 1 0 1 0 0 0 # 3
+IDX10 0 1 2 0 2 3 # quad, clockwise
+
+ATTR_poly_os 1 # coplanar decal
+TRIS 0 6 # two triangles, nothing else
+
+# end of file

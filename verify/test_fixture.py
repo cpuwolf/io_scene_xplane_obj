@@ -94,6 +94,50 @@ def main():
     check(OC.emit(b) == text, "the writer is not idempotent")
     os.remove(tmp)
 
+    # ---- trailing comments (not in the spec, shipped by add-ons) --------
+    # `VT ... # 12` used to abort the parse with "VT has a non-numeric field",
+    # so a file the sim loads happily could not be imported at all.
+    c = OC.parse(os.path.join(HERE, "fixtures", "comments.obj"))
+    print("parsed comments.obj: %r" % (c,))
+    check(len(c.vt) == 4, "comments: VT rows %d != 4" % len(c.vt))
+    check(len(c.idx) == 6, "comments: index table %d != 6" % len(c.idx))
+    check(c.idx == [0, 1, 2, 0, 2, 3], "comments: indices %r" % (c.idx,))
+    check([(r.px, r.py, r.pz) for r in c.vt] ==
+          [(-1.0, 0.0, -1.0), (1.0, 0.0, -1.0), (1.0, 0.0, 1.0), (-1.0, 0.0, 1.0)],
+          "comments: positions %r" % ([(r.px, r.py, r.pz) for r in c.vt],))
+    check(len(c.leaves) == 1 and c.leaves[0].indices == [0, 1, 2, 0, 2, 3],
+          "comments: leaves %r" % ([(lf.kind, lf.indices) for lf in c.leaves],))
+    check(not c.warnings, "comments: unexpected warnings %r" % (c.warnings,))
+    check(c.global_value("NORMAL_METALNESS") is not None,
+          "comments: NORMAL_METALNESS lost")
+    # the comment is not parsed but must survive in the stored row, because the
+    # writer re-emits those rows verbatim
+    check(c.vt[0].text.endswith("# 0"), "comments: VT row text lost its comment: %r"
+          % c.vt[0].text)
+    # a comment after the last command rides in the command stream, not in
+    # `trailer`, so check the re-emitted text -- that is what the writer copies
+    check(any(k == OC.EV_RAW and "end of file" in (p or "")
+              for k, p in c.events),
+          "comments: trailing comment lost from the event stream")
+    check("end of file" in OC.emit(c),
+          "comments: trailing comment lost when re-emitting")
+
+    # `#` inside a token is not a comment -- a texture may legitimately hold one
+    check(OC.strip_comment("TEXTURE livery#2.png") == "TEXTURE livery#2.png",
+          "strip_comment ate a `#` inside a token")
+    check(OC.strip_comment("VT 1 2 3 # 0") == "VT 1 2 3",
+          "strip_comment kept the comment")
+    check(OC.strip_comment("TRIS 0 6#x") == "TRIS 0 6#x",
+          "strip_comment split a token that starts mid-word")
+    check(OC.strip_comment("# whole line") == "", "strip_comment on a whole line")
+
+    text_c = OC.emit(c)
+    d = OC.parse_text(text_c)
+    check([r.as_tuple() for r in d.vt] == [r.as_tuple() for r in c.vt],
+          "comments: VT rows changed after a rewrite")
+    check(d.idx == c.idx, "comments: index table changed after a rewrite")
+    check(OC.emit(d) == text_c, "comments: the writer is not idempotent")
+
     # ---- triangulated geometry sanity ----------------------------------
     # X-Plane's front face is clockwise, so the winding normal of the quad
     # points down while the authored normals point up: the importer flips it.

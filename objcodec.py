@@ -230,6 +230,26 @@ def _split_line(line):
     return line.split()
 
 
+def strip_comment(line):
+    """Drop a trailing ``# ...``, keeping a ``#`` that sits inside a token.
+
+    A trailing comment is not in the OBJ8 spec, but exporters write the vertex
+    index after a `VT` row (``VT ... # 12``) and add-ons ship such files for
+    years, so a file the sim loads must import.  `#` only starts a comment at a
+    token boundary, which is what keeps a texture named `livery#2.png` whole.
+    The comment itself is not parsed but stays in the stored raw line, so an
+    untouched import still writes the file back byte for byte.
+    """
+    start = 0
+    while True:
+        i = line.find("#", start)
+        if i < 0:
+            return line
+        if i == 0 or line[i - 1] in " \t":
+            return line[:i].rstrip()
+        start = i + 1
+
+
 def parse_text(text):
     obj = Obj8()
     obj.line_ending = detect_line_ending(text)
@@ -273,7 +293,10 @@ def parse_text(text):
         stripped = line.strip()
         if not stripped:
             continue
-        words = _split_line(stripped)
+        # A `#` tail is tolerated the way the sim tolerates it: ignored for the
+        # numbers, kept verbatim in the raw line so the file still round-trips.
+        body = strip_comment(stripped)
+        words = _split_line(body) if body else [stripped]
         kw = words[0]
 
         if kw == "VT":
@@ -283,9 +306,11 @@ def parse_text(text):
             seen_data = True
             continue
         if kw in ("IDX", "IDX10"):
-            if kw == "IDX10" and len(words) > 2 and not idx_sep_found(captured):
+            if len(words) > 1 and not idx_sep_found(captured):
+                # both layouts: IDX10 packs many values per row, IDX has one,
+                # and a file may use either (or only single rows)
                 obj.idx_sep = _seps(line.lstrip())
-                captured.append("IDX10")
+                captured.append(kw)
             for w in words[1:]:
                 obj.idx.append(int(w))
             seen_data = True
@@ -375,18 +400,28 @@ def parse_text(text):
 
 
 _seps_re = re.compile(r"(\S+)(\s+)(\S+)(\s+)(\S+)")
+_seps_2_re = re.compile(r"(\S+)(\s+)(\S+)")
 
 
 def _seps(line):
-    """(keyword separator, number separator) of a three-token record."""
+    """(keyword separator, number separator) of a record.
+
+    A single-value `IDX 0` row has no second separator to read, so the number
+    separator falls back to a space -- otherwise a file whose indices are
+    written one per row would come back with tabs and the writer would stop
+    being idempotent.
+    """
     m = _seps_re.match(line)
-    if not m:
-        return ("\t", " ")
-    return (m.group(2), m.group(4))
+    if m:
+        return (m.group(2), m.group(4))
+    m = _seps_2_re.match(line)
+    if m:
+        return (m.group(2), " ")
+    return ("\t", " ")
 
 
 def idx_sep_found(captured):
-    return "IDX10" in captured
+    return "IDX10" in captured or "IDX" in captured
 
 
 def _parse_vt(words, lineno, raw=""):
