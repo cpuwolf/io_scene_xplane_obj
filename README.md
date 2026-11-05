@@ -54,6 +54,10 @@ the add-on registers a file handler for `.obj`.
   `material_gloss` (XP 12.1) is read the same way from its two files. A
   `TEXTURE_NORMAL` with no `NORMAL_METALNESS` is an XP10/11 file whose RGB is
   the whole vector, so that one stays a plain link;
+* a file with **no** `POINT_COUNTS` record (mandatory in the spec, dropped by
+  some exporters) imports with a warning that names the sizes used, and the
+  record is inserted on the way out — an untouched import stays byte-identical
+  apart from that one line;
 * a trailing `#` comment on a data or command line (`VT ... # 12`, which
   add-on exporters write and the spec does not mention) is stripped for the
   numbers and kept in the raw line, so a file the sim loads also imports here

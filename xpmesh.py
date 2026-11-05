@@ -1233,6 +1233,11 @@ def import_file(context, path, into_collection=None, report=None,
         raw = raw[3:]
     text = raw.decode("latin-1")
     obj8 = OC.parse_text(text)
+    # A file with no POINT_COUNTS would be handed back without one on the
+    # verbatim path, and X-Plane refuses to load that; the record is mandatory
+    # and the numbers are the tables we just read, so insert it into the stored
+    # text (one line, every other byte untouched).
+    text = OC.with_point_counts(text, obj8)
     warnings = list(obj8.warnings)
     obj_dir = os.path.dirname(path)
     base = os.path.splitext(os.path.basename(path))[0]

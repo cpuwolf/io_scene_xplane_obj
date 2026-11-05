@@ -138,6 +138,40 @@ def main():
     check(d.idx == c.idx, "comments: index table changed after a rewrite")
     check(OC.emit(d) == text_c, "comments: the writer is not idempotent")
 
+    # ---- a file with no POINT_COUNTS (mandatory, and some exporters drop it)
+    with open(FIXTURE, encoding="latin-1") as fh:
+        no_counts = "".join(l for l in fh if not l.startswith("POINT_COUNTS"))
+    nc = OC.parse_text(no_counts)
+    check(any("missing POINT_COUNTS" in w for w in nc.warnings),
+          "no POINT_COUNTS: not reported: %r" % (nc.warnings,))
+    check(any("7 0 0 9" in w for w in nc.warnings),
+          "no POINT_COUNTS: warning does not say which numbers were used: %r"
+          % (nc.warnings,))
+    check(len(nc.vt) == 7 and len(nc.idx) == 9,
+          "no POINT_COUNTS: tables %d/%d != 7/9" % (len(nc.vt), len(nc.idx)))
+
+    fixed = OC.with_point_counts(no_counts, nc)
+    ff = OC.parse_text(fixed)
+    check(not ff.warnings, "no POINT_COUNTS: still warns after inserting: %r"
+          % (ff.warnings,))
+    check(ff.global_value("POINT_COUNTS") == ("7", "0", "0", "9"),
+          "no POINT_COUNTS: inserted record is %r"
+          % (ff.global_value("POINT_COUNTS"),))
+    check([r.as_tuple() for r in ff.vt] == [r.as_tuple() for r in nc.vt]
+          and ff.idx == nc.idx
+          and [g for g in ff.globals if not g.startswith("POINT_COUNTS")]
+          == nc.globals,
+          "no POINT_COUNTS: inserting changed the tables or the other globals")
+    # it goes with the other globals, above the data tables, not at the end
+    check(fixed.index("POINT_COUNTS") < fixed.index("\nVT"),
+          "no POINT_COUNTS: record landed below the VT table")
+    # one line added, nothing else touched
+    check(fixed.replace("POINT_COUNTS\t7\t0\t0\t9\n", "", 1) == no_counts,
+          "no POINT_COUNTS: writing the record changed the rest of the file")
+    # a file that already has the record is returned as it came
+    check(OC.with_point_counts(text) == text,
+          "with_point_counts rewrote a file that already had the record")
+
     # ---- triangulated geometry sanity ----------------------------------
     # X-Plane's front face is clockwise, so the winding normal of the quad
     # points down while the authored normals point up: the importer flips it.

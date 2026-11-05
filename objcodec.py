@@ -392,11 +392,51 @@ def parse_text(text):
 
     flush_pending(True)
 
-    # POINT_COUNTS is mandatory; the writer always emits one, so a missing
-    # record is only worth a warning.
+    # POINT_COUNTS is mandatory: X-Plane's loader sizes its tables from it
+    # before it reads a single row.  The writer always emits one, so a missing
+    # record is only worth a warning here -- but say which numbers were used,
+    # because those are the ones a written file will carry.
     if obj.global_value("POINT_COUNTS") is None:
-        obj.warnings.append("missing POINT_COUNTS; counts were inferred")
+        obj.warnings.append(
+            "missing POINT_COUNTS; inferred %d %d %d %d from the tables and it "
+            "is added when the file is written"
+            % (len(obj.vt), len(obj.vline), len(obj.vlight), len(obj.idx)))
     return obj
+
+
+def with_point_counts(text, obj=None):
+    """The same file text with a POINT_COUNTS record, if it has none.
+
+    The counts are exactly the tables the text parses to, so an untouched
+    import of a file that never carried the record can still be handed back as
+    something the sim will load -- without touching any other byte.
+    """
+    if obj is None:
+        obj = parse_text(text)
+    if obj.global_value("POINT_COUNTS") is not None:
+        return text
+    nl = obj.line_ending or "\n"
+    counts = (len(obj.vt), len(obj.vline), len(obj.vlight), len(obj.idx))
+    line = "POINT_COUNTS\t%d\t%d\t%d\t%d" % counts
+    lines = text.split(nl)
+    at = None
+    for i, ln in enumerate(lines):
+        w = ln.split()
+        if w and w[0] in DATA_KW:
+            at = i
+            break
+    if at is None:
+        if lines and lines[-1] == "":
+            lines.insert(len(lines) - 1, line)
+        else:
+            lines.append(line)
+    else:
+        # put it after the global records, before the blank line that opens the
+        # data tables (a file may have several blank lines there)
+        while at > 0 and not lines[at - 1].strip():
+            at -= 1
+        lines.insert(at, line)
+    return nl.join(lines)
 
 
 _seps_re = re.compile(r"(\S+)(\s+)(\S+)(\s+)(\S+)")
