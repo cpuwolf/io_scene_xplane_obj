@@ -537,7 +537,7 @@ class _Converter(object):
 
     # -- nested animation: one bone per transform command -------------------
 
-    def _own_collection(self, base):
+    def _own_collection(self, label):
         """The collection the import already put this file in, made exportable.
 
         Import leaves the meshes next to the header, so converting in place
@@ -555,9 +555,9 @@ class _Converter(object):
                        and ob.get(XM.PROP_ROLE) == XM.ROLE_HEADER]
             if len(headers) > 1:
                 continue
-            coll.name = base + "_xp2b"
+            coll.name = label
             return coll
-        coll = _new_collection(base + "_xp2b")
+        coll = _new_collection(label)
         master.children.link(coll)
         return coll
 
@@ -579,7 +579,7 @@ class _Converter(object):
         self.block_by_index = {block.index: block for block in anim.blocks}
         self.specs, self.tips = XM.bone_tree(anim, self.pose, all_blocks=True)
 
-    def build_armature(self, coll, base):
+    def build_armature(self, coll, label):
         """The file's one armature: edit bones from the block tree, then keyed.
 
         Bones carry XPlane2Blender's own ``datarefs`` (on the armature *data*,
@@ -587,7 +587,7 @@ class _Converter(object):
         is where XP2B samples the pose).  Both are keyed frame 1..N, one key per
         file key, the mapping XP2B documents.
         """
-        name = base + "_bones"
+        name = label + ".bones"
         data = bpy.data.armatures.new(name)
         arm = bpy.data.objects.new(name, data)
         coll.objects.link(arm)
@@ -729,12 +729,19 @@ class _Converter(object):
         anim = XA.build(obj8)
 
         src = header.get(XM.PROP_SOURCE, "")
-        base = os.path.splitext(os.path.basename(src))[0] or header.name
+        # The tree is named after the file the geometry came from, extension
+        # included: one import reads as "C90B_int_decals.obj" in the outliner,
+        # with the Empty and the armature hanging off that same label.  `base`
+        # (no extension) stays the name for meshes, materials and the layer,
+        # because those feed the exported file name and XP2B appends its own
+        # ".obj" only when the name does not already end in a supported suffix.
+        filename = os.path.basename(src) or header.name
+        base = os.path.splitext(filename)[0]
         # merge identical output vertices: without it XP2B writes one VT per
         # triangle corner, so a cockpit with 14,477 shared vertices exports
         # 44,070 of them (the index count) and three times the file size
         self.scene.xplane.optimize = True
-        coll = self._own_collection(base)
+        coll = self._own_collection(filename)
         coll.xplane.is_exportable_collection = True
         coll.xplane.layer.name = base
         coll.xplane.layer.export_type = "aircraft"
@@ -752,9 +759,9 @@ class _Converter(object):
         # the whole rig (armature plus every batch) hangs off one Empty at the
         # world centre: moving it moves the aircraft, which is the only way a
         # collection of bone-parented meshes can be placed as a whole
-        self.root = _empty(coll, base + "_root", None)
+        self.root = _empty(coll, filename + ".worldcenter", None)
         self.prepare_tree(anim)
-        self.armature = self.build_armature(coll, base) if self.specs else None
+        self.armature = self.build_armature(coll, filename) if self.specs else None
         for leaf, chain in anim.leaves.items():
             for block in reversed(chain):
                 if self.tips.get(block.index):

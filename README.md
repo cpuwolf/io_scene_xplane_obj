@@ -12,7 +12,17 @@ remember, and nothing to set up per file.
 ![Importing an X-Plane OBJ8 object into Blender](blender_import_demo.gif)
 
 One `.obj` in, one XPlane2Blender authoring scene out: a collection, an armature
-with the file's animation on its bones, and a material per look.
+with the file's animation on its bones, and a material per look. The tree is
+named after the file it came from, extension included, so two imports never look
+alike in the outliner:
+
+```
+C90B_cockpit.obj                 collection (the exportable XP2B layer)
+└ C90B_cockpit.obj.worldcenter   Empty: move this to move the whole object
+  └ C90B_cockpit.obj.bones       armature: one bone per ANIM block
+    └ C90B_cockpit_000 …         one mesh per geometry command
+```
+
 
 ![Laminar's King Air C90B imported from its own .obj](aircraft_demo.gif)
 
@@ -38,10 +48,11 @@ the add-on registers a file handler for `.obj`.
 
 ## What it does
 
-* the import lands **as** the XPlane2Blender collection — one collection, one
-  armature, one Action per file, built in place rather than in a preview scene
-  that a second pass then rebuilds. There is no preview rig to ignore and no
-  leftover collection holding a header;
+* every `.obj` gets its own collection, named `<file>.obj`, and lands **as**
+  the XPlane2Blender layer — one collection, one armature, one Action per file,
+  built in place rather than in a preview scene that a second pass then
+  rebuilds. There is no preview rig to ignore and no leftover collection holding
+  a header (a folder import with five files gives five collections, not one);
 * one `.obj` becomes one mesh per geometry command, so a 21-part fuselage is 21
   objects you can hide, edit and join;
 * `TEXTURE` / `TEXTURE_LIT` / `TEXTURE_NORMAL` become a Principled material
