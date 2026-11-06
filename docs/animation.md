@@ -64,13 +64,6 @@ said so, part by part.
 
 ## Exporting animation
 
-The supported path is XPlane2Blender: it samples the pose at the frames the
-dataref keys sit on, which is exactly the mapping the import used. See
+XPlane2Blender samples the pose at the frames the dataref keys sit on, which is
+exactly the mapping the import used, so the two agree frame for frame. See
 [XPlane2Blender bridge](xp2b-bridge.md).
-
-The add-on's own exporter (see [export](export.md)) additionally offers:
-
-| mode | what happens |
-| --- | --- |
-| **From the file** (default) | the `ANIM_*` command stream is written exactly as imported; edit it as text in `xp8_events` |
-| **From Blender (rigs)** | every animated batch's block is regenerated from its rig's Action: keyframes become `ANIM_rotate_begin`/`ANIM_rotate_key` tables (and `ANIM_trans_*`), and the file's own animation commands are dropped |

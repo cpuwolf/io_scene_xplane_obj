@@ -1,7 +1,7 @@
 """Turn an imported OBJ8 header into an XPlane2Blender *authoring* scene.
 
 The importer in this addon keeps an OBJ8 file's command stream verbatim, so an
-untouched file round-trips byte for byte.  That model is deliberately NOT a
+file's own text is kept verbatim.  That model is deliberately NOT a
 one-to-one mapping to XPlane2Blender's: XP2B regenerates every ``ANIM_*`` block
 from the object tree on export, and it has no way to echo raw command text.
 
@@ -1393,9 +1393,9 @@ def _keep_source(coll, header):
     caller deletes the Empty.
 
     The Empty existed to hold the OBJ8 text and the batch tables.  All of that
-    is either replayed into the scene already or only needed for the standalone
-    exporter, and an Empty sitting at the world origin that nothing parents to
-    reads as leftover junk in the outliner.
+    is either replayed into the scene already or only needed for reference, and
+    an Empty sitting at the world origin that nothing parents to reads as
+    leftover junk in the outliner.
     """
     for name in SOURCE_PROPS:
         value = header.get(name)

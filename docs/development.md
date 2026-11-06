@@ -13,21 +13,16 @@ debugged without starting Blender.
 ## Tests
 
 ```sh
-python3 verify/test_codec.py verify/fixtures       # codec only, no Blender
-python3 verify/test_fixture.py                     # pinned expectations
+python3 verify/test_fixture.py                     # pinned parser expectations
 python3 verify/test_anim.py                        # ANIM_* evaluator, no Blender
 
-blender -b --factory-startup --python verify/roundtrip_blender.py -- verify/fixtures
-blender -b --factory-startup --python verify/anim_roundtrip.py -- verify/fixtures
 blender -b --factory-startup --python verify/material_combo_test.py   # combo map, texture + light-level fields, XP2B output
-blender -b --factory-startup --python verify/check_selection.py       # export = selection
-blender -b --factory-startup --python verify/check_bones.py -- <file.obj>       # nested animation -> bones
-blender -b --factory-startup --python verify/check_bones_xp2b.py -- <file.obj>  # ... and out through XP2B
-blender -b --factory-startup --python verify/check_cockpit.py -- <file.obj>     # ATTR_cockpit* -> cockpit feature, and back
-
-# stronger: the same tests against a real aircraft
-blender -b --factory-startup --python verify/roundtrip_blender.py -- \
-    "/path/to/X-Plane 12/Aircraft/<plane>/objects/<folder>"
+blender -b --factory-startup --python verify/check_bones_xp2b.py -- <file.obj>  # animation -> bones -> XP2B
+blender -b --factory-startup --python verify/check_cockpit.py -- <file.obj>     # ATTR_cockpit* -> cockpit feature
+blender -b --factory-startup --python verify/check_placement.py -- <file.obj>   # each batch where the file puts it
+blender -b --factory-startup --python verify/check_where_anim.py -- <file.obj>  # which block a batch hangs under
+blender -b --factory-startup --python verify/check_scale.py -- <file.obj>       # measured against the real aircraft
+blender -b --factory-startup --python verify/xp2b_convert.py -- <file.obj>      # just the bridge, then print the warnings
 ```
 
 Two probes print instead of asserting, which is what you want when a real file

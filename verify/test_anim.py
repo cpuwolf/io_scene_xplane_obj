@@ -177,56 +177,6 @@ def test_axes():
           "X-Plane +Y (up) must be Blender +Z, got %r" % (a,))
 
 
-def test_simplify():
-    """A straight ramp keeps two keys, a bend keeps the bend."""
-    ramp = [(i / 100.0, i * 0.9) for i in range(101)]
-    check(len(XA.simplify(ramp, 0.005)) == 2,
-          "a linear ramp should compact to 2 keys, got %d"
-          % len(XA.simplify(ramp, 0.005)))
-    bend = [(i / 100.0, 0.0 if i < 50 else (i - 50) * 1.8) for i in range(101)]
-    kept = XA.simplify(bend, 0.005)
-    check(3 <= len(kept) <= 4, "a bend should keep ~3 keys, got %d" % len(kept))
-
-
-def test_emit_symmetry():
-    """Generated commands must evaluate to what they were generated from."""
-    text = """I
-800
-OBJ
-
-POINT_COUNTS 3 0 0 3
-
-VT 0 0 0 0 1 0 0 0
-VT 1 0 0 0 1 0 1 0
-VT 0 0 1 0 1 0 0 1
-IDX10 0 1 2
-
-ANIM_begin
-%s
-%s
-TRIS 0 3
-ANIM_end
-"""
-    keys = [(0.0, 0.0), (0.5, -30.0), (1.0, -120.0)]
-    lines = XA.rotate_block((0.0, 0.0, 1.0), keys, "dref")
-    lines += XA.trans_block([(0.0, (0.0, 0.0, 0.0)), (1.0, (0.5, 0.0, 0.2))],
-                            "dref")
-    anim = XA.build(OC.parse_text(text % ("\n".join(lines), "")))
-    m = anim.matrix_at({"dref": 0.5}, 0)
-    rot = math.degrees(math.atan2(-m[0][1], m[0][0]))
-    # the translate is applied after the rotation, so it is the raw offset
-    check(abs(rot + 30.0) < 1e-6, "emitted key table reads back as %r deg" % rot)
-    # the translate is the *outer* command, so the point is moved first and the
-    # result is rotated: undoing the rotation must give the offset back
-    back = apply(XA.mat_mul(XA.mat_rot((0.0, 0.0, 1.0), 30.0), m), (0.0, 0.0, 0.0))
-    check(close(back, (0.25, 0.0, 0.1), 1e-9),
-          "emitted trans key table reads back as %r" % (back,))
-
-
-# ---------------------------------------------------------------------------
-# real files
-# ---------------------------------------------------------------------------
-
 def check_file(path):
     obj8 = OC.parse(path)
     anim = XA.build(obj8)
@@ -309,8 +259,6 @@ def main():
     test_key_table()
     test_visibility()
     test_axes()
-    test_simplify()
-    test_emit_symmetry()
     print("semantics OK\n")
 
     dirs = sys.argv[1:] or [os.path.join(os.path.dirname(

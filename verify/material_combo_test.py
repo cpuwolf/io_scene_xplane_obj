@@ -320,10 +320,6 @@ def case_metalness(XM):
     check(close(rough[0], 1.0 - METAL_NRM[3] / 255.0),
           "roughness %.4f == 1 - map A %.4f" % (rough[0], 1.0 - METAL_NRM[3] / 255.0))
 
-    tex = XM.material_textures(mat)
-    check(tex["TEXTURE_NORMAL"] == "nrm.png",
-          "write-back still names the normal map: %r" % tex["TEXTURE_NORMAL"])
-
     # the exporter reads its textures from the layer, not from the node tree:
     # without these fields an imported object exports with no textures at all
     L = layer_fields()

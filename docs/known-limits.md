@@ -21,6 +21,6 @@
   reported.
 * `ATTR_manip_device` (TDS GTN750Xi and friends) is a third-party extension with
   no XP2B counterpart and is reported, not converted.
-* With XPlane2Blender enabled, the add-on's own exporter no longer reproduces a
-  file byte for byte after the import has converted the scene — that is the
-  bridge's trade, see [export](export.md).
+* The add-on does not write `.obj` files at all: what the scene becomes is what
+  XPlane2Blender writes, and it works from the object tree, so the file's
+  original text is not echoed back.

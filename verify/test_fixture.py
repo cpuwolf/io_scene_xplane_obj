@@ -76,24 +76,6 @@ def main():
           "LIGHT_PARAM was not preserved: %r" % (raw,))
     check(not o.warnings, "unexpected parse warnings: %r" % (o.warnings,))
 
-    # ---- round trip ----------------------------------------------------
-    text = OC.emit(o)
-    tmp = os.path.join(HERE, "_fixture_roundtrip.obj")
-    with open(tmp, "wb") as f:
-        f.write(text.encode("latin-1", "replace"))
-    b = OC.parse(tmp)
-    check(b.globals == o.globals, "globals changed: %r" % (b.globals,))
-    check([r.as_tuple() for r in b.vt] == [r.as_tuple() for r in o.vt],
-          "VT rows changed")
-    check(b.idx == o.idx, "index table changed")
-    check([(lf.kind, lf.indices, lf.offset, lf.count, lf.state)
-           for lf in b.leaves] ==
-          [(lf.kind, lf.indices, lf.offset, lf.count, lf.state)
-           for lf in o.leaves], "leaves changed")
-    check(b.events == o.events, "command stream changed")
-    check(OC.emit(b) == text, "the writer is not idempotent")
-    os.remove(tmp)
-
     # ---- trailing comments (not in the spec, shipped by add-ons) --------
     # `VT ... # 12` used to abort the parse with "VT has a non-numeric field",
     # so a file the sim loads happily could not be imported at all.
@@ -115,12 +97,10 @@ def main():
     check(c.vt[0].text.endswith("# 0"), "comments: VT row text lost its comment: %r"
           % c.vt[0].text)
     # a comment after the last command rides in the command stream, not in
-    # `trailer`, so check the re-emitted text -- that is what the writer copies
+    # `trailer`
     check(any(k == OC.EV_RAW and "end of file" in (p or "")
               for k, p in c.events),
           "comments: trailing comment lost from the event stream")
-    check("end of file" in OC.emit(c),
-          "comments: trailing comment lost when re-emitting")
 
     # `#` inside a token is not a comment -- a texture may legitimately hold one
     check(OC.strip_comment("TEXTURE livery#2.png") == "TEXTURE livery#2.png",
@@ -130,13 +110,6 @@ def main():
     check(OC.strip_comment("TRIS 0 6#x") == "TRIS 0 6#x",
           "strip_comment split a token that starts mid-word")
     check(OC.strip_comment("# whole line") == "", "strip_comment on a whole line")
-
-    text_c = OC.emit(c)
-    d = OC.parse_text(text_c)
-    check([r.as_tuple() for r in d.vt] == [r.as_tuple() for r in c.vt],
-          "comments: VT rows changed after a rewrite")
-    check(d.idx == c.idx, "comments: index table changed after a rewrite")
-    check(OC.emit(d) == text_c, "comments: the writer is not idempotent")
 
     # ---- a file with no POINT_COUNTS (mandatory, and some exporters drop it)
     with open(FIXTURE, encoding="latin-1") as fh:
@@ -150,7 +123,7 @@ def main():
     check(len(nc.vt) == 7 and len(nc.idx) == 9,
           "no POINT_COUNTS: tables %d/%d != 7/9" % (len(nc.vt), len(nc.idx)))
 
-    fixed = OC.with_point_counts(no_counts, nc)
+    fixed = OC.with_point_counts(no_counts)
     ff = OC.parse_text(fixed)
     check(not ff.warnings, "no POINT_COUNTS: still warns after inserting: %r"
           % (ff.warnings,))
@@ -169,7 +142,9 @@ def main():
     check(fixed.replace("POINT_COUNTS\t7\t0\t0\t9\n", "", 1) == no_counts,
           "no POINT_COUNTS: writing the record changed the rest of the file")
     # a file that already has the record is returned as it came
-    check(OC.with_point_counts(text) == text,
+    with open(FIXTURE, encoding="latin-1") as fh:
+        original = fh.read()
+    check(OC.with_point_counts(original) == original,
           "with_point_counts rewrote a file that already had the record")
 
     # ---- triangulated geometry sanity ----------------------------------

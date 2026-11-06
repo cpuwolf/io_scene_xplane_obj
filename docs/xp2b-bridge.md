@@ -5,10 +5,9 @@ the N-panel as *author with XPlane2Blender*), so the exportable collection exist
 the moment the file lands. From then on the scene belongs to XPlane2Blender and
 **File > Export > X-Plane Object (.obj)** is the export path.
 
-This is a one-way bridge: XP2B rebuilds every `ANIM_*` block from the object
-tree, so it cannot echo raw commands. Authoring (manipulators, new animations,
-lights, LODs) is what it is good at; echoing a file byte for byte is what the
-standalone exporter was for.
+This is a one-way bridge and it is the whole export path: XP2B rebuilds every
+`ANIM_*` block from the object tree. Authoring (manipulators, new animations,
+lights, LODs) is what it is good at — nothing here writes a `.obj` itself.
 
 ## What maps to what
 

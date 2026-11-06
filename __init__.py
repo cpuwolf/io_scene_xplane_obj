@@ -3,10 +3,12 @@
 # (its presence would make Blender ignore the manifest).
 
 """
-X-Plane OBJ8 object importer/exporter for Blender.
+X-Plane OBJ8 object importer for Blender.
 
     File > Import > X-Plane OBJ8 (.obj)
-    File > Export > X-Plane OBJ8 (.obj)
+
+It imports; XPlane2Blender exports.  The import lands as that add-on's authoring
+scene, so there is no separate convert step and no exporter of our own.
 
 What is imported
 ----------------
@@ -16,7 +18,7 @@ addon turns
 
     one OBJ file  ->  one Empty ("header") + one mesh per geometry command
 
-into a normal Blender scene, and puts it back together on export:
+into a normal Blender scene, ready for XPlane2Blender to write back out:
 
   * the TEXTURE / TEXTURE_LIT / TEXTURE_NORMAL maps become a Principled
     material (base colour, emission, normal map), with the original relative
@@ -28,9 +30,8 @@ into a normal Blender scene, and puts it back together on export:
     are NOT the averaged face normals Blender would invent;
   * the ground truth for everything else (ANIM_begin/end, ANIM_rotate/trans,
     ATTR_manip_*, LIGHT_PARAM, GLOBAL_*, ATTR_LOD, ...) is kept verbatim on the
-    header Empty and re-emitted around the geometry, so editing a mesh does not
-    silently delete the aircraft's animations;
-  * a file you did not touch is written back byte for byte.
+    collection as text and is what the conversion reads, so editing a mesh does
+    not silently delete the aircraft's animations.
 
 Animation
 ---------
@@ -52,7 +53,7 @@ is counter-clockwise.
 
 What is NOT supported
 ---------------------
-Lines (VLINE + LINES) are imported read-only and written back from their stored
+Lines (VLINE + LINES) are imported read-only and carried through from their stored
 indices; light primitives are preserved as raw commands.  Re-keying an animation
 is limited to a rigid transform per batch (Euler XYZ about the origin), and
 ANIM_show/hide are carried through rather than authored.  Manipulators survive
@@ -241,237 +242,6 @@ class FILE_HANDLER_OT_xplane_obj(bpy.types.FileHandler):
 
 # ---------------------------------------------------------------------------
 # export
-# ---------------------------------------------------------------------------
-
-@_add
-class EXPORT_OT_xplane_obj(bpy.types.Operator, ExportHelper):
-    """Export an X-Plane OBJ8 object (.obj)"""
-    bl_idname = "export_scene.xplane_obj"
-    bl_label = "X-Plane OBJ8 (.obj)"
-    bl_options = {'REGISTER'}
-
-    filename_ext = ".obj"
-    filter_glob: StringProperty(default="*.obj", options={'HIDDEN'})
-    check_existing: BoolProperty(default=False)
-
-    mode: EnumProperty(
-        name="Write",
-        items=[
-            ('FILE', "One file",
-             "Write the selected X-Plane object, or the selected parts / "
-             "meshes, to the file name below"),
-            ('WRITE_BACK', "Back to source files",
-             "Write every selected X-Plane object back to the path it came "
-             "from (or into the folder below)"),
-        ],
-        default='FILE')
-
-    preserve_unmodified: BoolProperty(
-        name="Copy untouched files verbatim",
-        description="If no geometry changed, write the original file text "
-                    "instead of regenerating it",
-        default=True)
-
-    uv_layer: StringProperty(
-        name="UV map", default="",
-        description="UV layer to export (empty = active layer)")
-
-    animation: EnumProperty(
-        name="Animation",
-        items=[
-            ('FILE', "From the file",
-             "Write the ANIM_* command stream exactly as it was imported. "
-             "Editing the animation means editing the xp8_events property"),
-            ('BLENDER', "From Blender (rigs)",
-             "Regenerate every animated part's ANIM_* block from its rig: the "
-             "Action keyframes become ANIM_rotate_key / ANIM_trans_key tables, "
-             "and the file's own animation commands are dropped. Use this "
-             "after you have changed an animation in Blender"),
-        ],
-        default='FILE')
-
-    patch_obj: BoolProperty(
-        name="Write .patch.obj",
-        description="Also write <name>.patch.obj next to the file: the variant "
-                    "Ortho4XP reads as a mesh patch (ANCHOR on line 1, geometry "
-                    "only). The ANCHOR longitude/latitude is taken from the "
-                    "Ortho4XP tile in the scene, its altitude and heading are 0. "
-                    "This file is not a valid X-Plane object",
-        default=False)
-
-    def invoke(self, context, event):
-        obj = context.active_object
-        header = _find_header(obj)
-        if header is not None:
-            src = header.get(XM.PROP_SOURCE)
-            if src:
-                parts = self._selection(context).get(header)
-                if parts is not None:
-                    # a subset must not default to overwriting the whole file
-                    self.filepath = os.path.splitext(src)[0] + "_selected.obj"
-                else:
-                    self.filepath = src
-        self.mode = 'FILE'
-        return ExportHelper.invoke(self, context, event)
-
-    def execute(self, context):
-        if self.mode == 'WRITE_BACK':
-            return self._write_back(context)
-        return self._write_one(context)
-
-    def _patch_path(self, dst):
-        if not self.patch_obj:
-            return None
-        return os.path.splitext(dst)[0] + ".patch.obj"
-
-    def _selection(self, context):
-        """What is selected right now: {header: None | [part, ...]}.
-
-        ``None`` means the header Empty itself is selected, i.e. the whole
-        object; a list holds the parts selected under it.  Objects outside an
-        imported X-Plane object (a loose mesh) never appear here.
-        """
-        out = {}
-        for ob in context.selected_objects:
-            header = _find_header(ob)
-            if header is None:
-                continue
-            if ob is header:
-                out[header] = None          # the object itself: every part
-            elif header in out:
-                if out[header] is not None:
-                    out[header].append(ob)
-            else:
-                out[header] = [ob]
-        return out
-
-    def _scene_headers(self, context):
-        return [ob for ob in context.scene.objects if XM.is_header(ob)]
-
-    def _write_back(self, context):
-        picked = self._selection(context)
-        if not picked:
-            if context.selected_objects:
-                self.report({'ERROR'}, "the selection holds no imported "
-                                       "X-Plane object")
-                return {'CANCELLED'}
-            # nothing selected: every imported object in the scene
-            picked = dict((h, None) for h in self._scene_headers(context))
-        if not picked:
-            self.report({'ERROR'}, "no imported X-Plane objects in this scene")
-            return {'CANCELLED'}
-        target_dir = os.path.dirname(self.filepath)
-        ok = verbatim = 0
-        for header, parts in picked.items():
-            src = header.get(XM.PROP_SOURCE) or ""
-            if src and os.path.isdir(os.path.dirname(src)):
-                dst = src
-            elif target_dir:
-                dst = os.path.join(target_dir,
-                                   os.path.basename(src or header.name + ".obj"))
-            else:
-                continue
-            try:
-                stats = XM.export_header(
-                    context, header, dst,
-                    uv_name=self.uv_layer or None,
-                    preserve=self.preserve_unmodified,
-                    report=self.report,
-                    patch_path=self._patch_path(dst),
-                    animation=self.animation,
-                    only=None if parts is None else [ob.name for ob in parts])
-            except (OSError, ValueError) as exc:
-                self.report({'ERROR'}, "%s: %s" % (os.path.basename(dst), exc))
-                continue
-            if stats:
-                ok += 1
-                verbatim += 1 if stats["verbatim"] else 0
-        self.report({'INFO'}, "wrote %d file(s), %d unchanged" % (ok, verbatim))
-        return {'FINISHED'}
-
-    def _write_one(self, context):
-        picked = self._selection(context)
-        selected = list(context.selected_objects)
-        if not picked and not selected:
-            # nothing selected: the whole scene.  One object can be written
-            # with its command stream; several can only be flattened into one
-            # file (an .obj is one header + its batches).
-            headers = self._scene_headers(context)
-            if len(headers) == 1:
-                picked = {headers[0]: None}
-            elif headers:
-                self.report({'WARNING'},
-                            "nothing selected: %d objects in the scene go into "
-                            "one file, their command streams (animation, "
-                            "manipulators) are dropped. Select one object to "
-                            "keep them" % len(headers))
-        header = None
-        if picked:
-            header = _find_header(context.active_object)
-            if header not in picked:
-                header = next(iter(picked))
-            assert header is not None           # picked is not empty here
-            if len(picked) > 1:
-                self.report({'WARNING'},
-                            "selection spans %d objects; one file per export, "
-                            "writing %s only" % (len(picked), header.name))
-            parts = picked[header]
-            try:
-                stats = XM.export_header(
-                    context, header, self.filepath,
-                    uv_name=self.uv_layer or None,
-                    preserve=self.preserve_unmodified,
-                    report=self.report,
-                    patch_path=self._patch_path(self.filepath),
-                    animation=self.animation,
-                    only=None if parts is None else [ob.name for ob in parts])
-            except (OSError, ValueError) as exc:
-                self.report({'ERROR'}, str(exc))
-                return {'CANCELLED'}
-            self.report({'INFO'}, "%s: %d VT rows, %d indices%s"
-                        % (os.path.basename(self.filepath), stats["vt"],
-                           stats["indices"],
-                           " (verbatim)" if stats["verbatim"] else ""))
-            return {'FINISHED'}
-
-        meshes = [ob for ob in selected if ob.type == 'MESH']
-        if not meshes and not selected:
-            # nothing selected at all: every mesh in the scene
-            meshes = [ob for ob in context.scene.objects if ob.type == 'MESH']
-        if not meshes:
-            self.report({'ERROR'}, "no mesh objects to export")
-            return {'CANCELLED'}
-        try:
-            stats = XM.export_unparented_objects(
-                context, self.filepath, meshes,
-                uv_name=self.uv_layer or None, report=self.report,
-                patch_path=self._patch_path(self.filepath))
-        except (OSError, ValueError) as exc:
-            self.report({'ERROR'}, str(exc))
-            return {'CANCELLED'}
-        if stats is None:
-            return {'CANCELLED'}
-        self.report({'INFO'}, "%s: %d meshes, %d VT rows"
-                    % (os.path.basename(self.filepath), stats["objects"],
-                       stats["vt"]))
-        return {'FINISHED'}
-
-
-def _find_header(obj):
-    """Walk up to the header Empty that owns `obj`."""
-    hops = 0
-    while obj is not None and hops < 32:
-        if XM.is_header(obj):
-            return obj
-        obj = obj.parent
-        hops += 1
-    return None
-
-
-# ---------------------------------------------------------------------------
-# authoring: give a part its own animation rig
-# ---------------------------------------------------------------------------
-
 @_add
 class OBJECT_OT_xp8_anim_rig(bpy.types.Operator):
     """Give the selected part an animation rig, so it can be keyframed here"""
@@ -746,7 +516,7 @@ class VIEW3D_PT_xplane_obj(bpy.types.Panel):
                 bbox.label(text="... %d more" % (len(entries) - 12))
             if obj.get(XM.PROP_ANIM_ACTION):
                 bbox.label(text="action: %s" % obj[XM.PROP_ANIM_ACTION])
-            bbox.label(text="preview only: the file's animation is written back",
+            bbox.label(text="preview only: the file's animation is in xp8_events",
                        icon='INFO')
 
         if XM.is_batch(obj):
@@ -793,19 +563,13 @@ def _menu_import(self, context):
     self.layout.operator(IMPORT_OT_xplane_obj.bl_idname, text="X-Plane OBJ8 (.obj)")
 
 
-def _menu_export(self, context):
-    self.layout.operator(EXPORT_OT_xplane_obj.bl_idname, text="X-Plane OBJ8 (.obj)")
-
-
 def register():
     for cls in CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.TOPBAR_MT_file_import.append(_menu_import)
-    bpy.types.TOPBAR_MT_file_export.append(_menu_export)
 
 
 def unregister():
-    bpy.types.TOPBAR_MT_file_export.remove(_menu_export)
     bpy.types.TOPBAR_MT_file_import.remove(_menu_import)
     for cls in reversed(CLASSES):
         bpy.utils.unregister_class(cls)

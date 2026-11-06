@@ -41,8 +41,8 @@ Details, installing from source and uninstalling: [docs/install.md](https://gith
 
 | question | answer |
 | --- | --- |
-| Does it export too? | The export is XPlane2Blender's. This add-on gets the file *into* its authoring scene correctly — that is the hard part. |
-| Do I lose the original file? | No. The file's text is kept on the collection and geometry edits are written around the command stream, so animations and manipulators survive edits. |
+| Does it export too? | It is an **importer**: the export is XPlane2Blender's. This add-on gets the file *into* its authoring scene correctly — that is the hard part. |
+| Do I lose the original file? | No. The file's own text is kept on the collection (custom properties), and everything the conversion cannot express is reported rather than dropped silently. |
 | Will a lever still move? | Yes — one bone per `ANIM_*` block, one keyframe per key the file has, key N on frame N. Drag the time line to watch it. |
 | Are X-Plane's normal maps handled? | Yes, as the **combo map** they are: `R,G` → normal (Z rebuilt), blue → Metallic (metalness mode), alpha → gloss inverted into Roughness. `TEXTURE_MAP` (12.1) included. |
 | Cockpit panels, manipulators, light levels? | `ATTR_cockpit*`, `ATTR_manip_*`, `ATTR_light_level`, `ATTR_draw_disable`, `ATTR_solid_camera` all land on the XPlane2Blender material/object/layer fields they belong to. |
@@ -57,7 +57,6 @@ Details, installing from source and uninstalling: [docs/install.md](https://gith
 | [import](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/import.md) | the tree, meshes, materials, combo maps, tolerant parsing, where the data lives |
 | [animation](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/animation.md) | armature, keys, `ANIM_show/hide`, the dataref panel, import options |
 | [XPlane2Blender bridge](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/xp2b-bridge.md) | what maps to what, and the two exceptions worth knowing |
-| [export (legacy)](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/export.md) | byte-identical write-back, Ortho4XP `.patch.obj` |
 | [known limits](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/known-limits.md) | what is not carried, and how accurate the bridge is |
 | [development](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/development.md) | dev link, tests, releasing |
 

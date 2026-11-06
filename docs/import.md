@@ -98,6 +98,6 @@ damage it.
 | `xp8_anim_vis` (on a mesh) | the `ANIM_show/hide` rules of its block, in file order |
 | `xp8_vt` (mesh attribute) | source `VT` row index per vertex, so untouched rows keep their exact text |
 
-Editing `xp8_events`, `xp8_globals` or `xp8_leaf_states` reaches the file when
-the standalone exporter writes it (see [export](export.md)); the XP2B path
-rebuilds the commands from the object tree instead.
+The conversion to XPlane2Blender reads the text from `xp8_dump`, so it is what
+the scene was built from; the properties stay afterwards for reference and for
+scripts that re-parse it.
