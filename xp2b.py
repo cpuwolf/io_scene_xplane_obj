@@ -522,7 +522,7 @@ class _Converter(object):
         self.material_cache = {}    # (material, values) -> the one clone sharing them
         self.root = None            # the Empty the whole rig hangs off
         self.visibility_placed = 0   # ANIM_show/hide rules put on bones
-        self.light_level_dropped = []  # batches whose override a panel cannot keep
+
 
     # -- helpers ----------------------------------------------------------
     def warn(self, msg):
@@ -841,16 +841,6 @@ class _Converter(object):
         if not made:
             self.warn("%s: no geometry was moved" % base)
 
-        if self.light_level_dropped:
-            names = self.light_level_dropped
-            shown = ", ".join(names[:8]) + (" and %d more" % (len(names) - 8)
-                                           if len(names) > 8 else "")
-            self.warn("%d batch(es) lost their ATTR_light_level (%s): "
-                      "XPlane2Blender refuses a cockpit-panel material that also "
-                      "overrides the light level, and a panel batch's brightness "
-                      "comes from the panel texture anyway"
-                      % (len(names), shown))
-
         if self.specs:
             # not a loss: the rig is one bone per block by design, and XP2B
             # writes a bone's show/hide inside that bone's own ANIM_begin, so
@@ -925,7 +915,27 @@ class _Converter(object):
         self._material_set(ob, [("draw", False)], "nodraw")
 
     def _apply_light_level(self, ob, state):
-        """ATTR_light_level -> material.xplane.lightLevel_* (an XP2B material attr)."""
+        """ATTR_light_level -> the *object's* X-Plane light level.
+
+        XP2B has the same fields on the object and on the material, and writes
+        the material's only when the object has none.  The object is the right
+        home here, for two reasons:
+
+        * the line is per geometry command and an object *is* one command, so
+          nothing has to be cloned -- a material carries one value, and
+          cloning it per level cost 48 materials on a C90B cockpit;
+        * XP2B's material path loses levels: it emits ATTR_light_level when the
+          material changes and a reset when leaving it, but does not re-emit the
+          level for the next batch that shares the earlier value.  On
+          C90B_cockpit.obj that silently dropped 21 of 33 batches
+          (laminar/c90/warning/gear_handle).  Writing it per object survives any
+          batch order.
+
+        It also sidesteps validatePanel: XP2B refuses a *panel material* that
+        overrides the level (and cancels the whole export), but a panel batch's
+        object-level override is legal in X-Plane and is what the source file
+        has, so those lines are now kept instead of dropped.
+        """
         for cat, raws in state or []:
             if cat != "light_level":
                 continue
@@ -939,10 +949,11 @@ class _Converter(object):
                     self.warn("%s: ATTR_light_level arguments not parsed"
                               % ob.name)
                     continue
-                self._material_set(ob, [
-                    ("lightLevel", True), ("lightLevel_v1", v1),
-                    ("lightLevel_v2", v2), ("lightLevel_dataref", dref),
-                ], "light")
+                x = ob.xplane
+                x.lightLevel = True
+                x.lightLevel_v1 = v1
+                x.lightLevel_v2 = v2
+                x.lightLevel_dataref = dref
 
     def _apply_camera_state(self, ob, state):
         """ATTR_solid_camera -> material.xplane.solid_camera (also a material attr)."""
@@ -1189,14 +1200,11 @@ class _Converter(object):
         else:
             lum = nums[0] if nums else None
 
-        # XPlane2Blender refuses a panel material that also overrides the light
-        # level ("Must not override light level") and writes no file at all, so
-        # the panel wins and the override is reported - the panel's lighting
-        # comes from the panel texture, the override has no meaning there.
-        for slot in ob.material_slots:
-            if slot.material is not None and slot.material.xplane.lightLevel:
-                self.light_level_dropped.append(ob.name)
-                break
+        # validatePanel refuses a *panel material* that also overrides the
+        # light level ("Must not override light level", which cancels the whole
+        # export), so the material keeps the panel and no override.  A panel
+        # batch's override lives on the object instead (see
+        # _apply_light_level), which is legal in X-Plane and survives.
         pairs = [("cockpit_feature", "panel"), ("lightLevel", False)]
         if region is not None:
             # the file counts regions from 0, XPlane2Blender's enum from 1

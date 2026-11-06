@@ -47,6 +47,16 @@ the add-on registers a file handler for `.obj`.
 * `TEXTURE` / `TEXTURE_LIT` / `TEXTURE_NORMAL` become a Principled material
   (base colour, emission, normal map), and the original *relative* texture paths
   (`../../objects/foo/bar.png`) are written back out unchanged;
+* `ATTR_light_level` becomes the **object's** *X-Plane > Light Levels >
+  Override Light Level* (value1 / value2 / dataref). The line is per geometry
+  command and an object is one command, so no material is cloned for it — and
+  the material path is not just redundant, it loses batches: XP2B writes the
+  material's level when the material changes and a reset when leaving it, but
+  does not re-emit it for the next batch that shares the earlier value
+  (C90B_cockpit.obj: 21 of 33 batches silently lost
+  `laminar/c90/warning/gear_handle`). Per object it survives any batch order,
+  and a cockpit-panel batch keeps its level as well, because XP2B only refuses
+  a *panel material* that overrides the level;
 * the texture set also lands on the **XPlane2Blender layer** — Collection >
   X-Plane > Textures: Default / Night / Normal-Specular, and on 12.0+ Normal /
   Material-Gloss / Gloss — plus `Normal Metalness` and `Blend Glass`. That is

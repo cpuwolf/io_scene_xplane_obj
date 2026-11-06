@@ -90,10 +90,40 @@ IDX10 0 1 2 0 2 3
 TRIS 0 6
 """
 
+# two quads, so a state change can give each batch its own material
+TWO_QUADS = """A
+800
+OBJ
+
+%s
+POINT_COUNTS 8 0 0 12
+
+VT -2 0 -1 0 1 0 0 1
+VT -1 0 -1 0 1 0 1 1
+VT -1 0 1 0 1 0 1 0
+VT -2 0 1 0 1 0 0 0
+VT 1 0 -1 0 1 0 0 1
+VT 2 0 -1 0 1 0 1 1
+VT 2 0 1 0 1 0 1 0
+VT 1 0 1 0 1 0 0 0
+IDX10 0 1 2 0 2 3 4 5 6 4 6 7
+"""
+
 METAL_NRM = (128, 128, 229, 64)      # R,G normal, B metal, A gloss
 MAP_NRM = (153, 102, 0, 255)         # XP12.1: R,G only, B/A unused
 MAP_MAT = (51, 204, 0, 255)          # R metal, G gloss
 CLASSIC_NRM = (128, 128, 255, 255)   # RGB is the whole vector
+
+
+def fixture_text(name, text, files):
+    d = os.path.join(OUT, name)
+    os.makedirs(d, exist_ok=True)
+    for fname, rgba in files.items():
+        write_png(os.path.join(d, fname), [[rgba] * 8] * 8)
+    obj = os.path.join(d, "quads.obj")
+    with open(obj, "w") as fh:
+        fh.write(text)
+    return obj, d
 
 
 def fixture(name, globals_text, files):
@@ -140,14 +170,21 @@ def layer_fields():
             "metal": L.normal_metalness, "glass": L.blend_glass}
 
 
-def xp2b_header():
-    """TEXTURE-ish records XP2B's own exporter would write, or None."""
+def xp2b_text():
+    """What XP2B's own exporter would write, or None when it is absent."""
     try:
         from io_xplane2blender.xplane_types import xplane_file as XF
         files = XF.createFilesFromBlenderRootObjects(
             bpy.context.scene, bpy.context.view_layer, False)
-        text = files[0].write()
+        return files[0].write()
     except Exception:                                  # noqa: BLE001
+        return None
+
+
+def xp2b_header():
+    """TEXTURE-ish records XP2B's own exporter would write, or None."""
+    text = xp2b_text()
+    if text is None:
         return None
     want = ("TEXTURE", "TEXTURE_LIT", "TEXTURE_NORMAL", "TEXTURE_MAP",
             "NORMAL_METALNESS", "BLEND_GLASS")
@@ -365,6 +402,63 @@ def case_classic(XM):
           "NORMAL_METALNESS): %r" % (L,))
 
 
+def case_light_level(XM):
+    print("\n== ATTR_light_level -> the object's X-Plane light level", flush=True)
+    # batch 1: a light level on a normal batch.
+    # batch 2: ATTR_cockpit plus its own level. XP2B refuses a *panel material*
+    # that overrides the level and cancels the whole export, so the level has to
+    # ride on the object -- which is where a per-batch line belongs anyway.
+    text = (TWO_QUADS % "TEXTURE alb.png") + """ATTR_light_level 0 1 sim/cockpit2/electrical/panel_brightness_ratio[0]
+TRIS 0 6
+ATTR_cockpit
+ATTR_light_level 0 1 laminar/c90/warning/gear_handle
+TRIS 6 6
+"""
+    obj, d = fixture_text("light_level", text, {"alb.png": (200, 200, 200, 255)})
+    fresh()
+    try:
+        bpy.ops.import_scene.xplane_obj(filepath=obj)
+    except RuntimeError as exc:
+        print("  note import reported: %s" % str(exc).splitlines()[0][:70],
+              flush=True)
+
+    meshes = [o for o in bpy.data.objects if o.type == 'MESH']
+    check(len(meshes) == 2, "two batches: %d meshes" % len(meshes))
+    if len(meshes) != 2:
+        return
+    first, second = sorted(meshes, key=lambda o: o.name)
+    a, b = first.xplane, second.xplane
+    check(a.lightLevel and a.lightLevel_dataref
+          == "sim/cockpit2/electrical/panel_brightness_ratio[0]"
+          and close(a.lightLevel_v1, 0.0) and close(a.lightLevel_v2, 1.0),
+          "batch 1 carries the level on the object: %s %s %s"
+          % (a.lightLevel, (a.lightLevel_v1, a.lightLevel_v2),
+             a.lightLevel_dataref))
+    check(b.lightLevel
+          and b.lightLevel_dataref == "laminar/c90/warning/gear_handle",
+          "the panel batch keeps its level too: %s %s"
+          % (b.lightLevel, b.lightLevel_dataref))
+    check(first.material_slots[0].material.xplane.cockpit_feature != "panel"
+          and second.material_slots[0].material.xplane.cockpit_feature == "panel",
+          "only the second material is a panel: %r / %r"
+          % (first.material_slots[0].material.xplane.cockpit_feature,
+             second.material_slots[0].material.xplane.cockpit_feature))
+    check(not any(m.xplane.lightLevel for m in bpy.data.materials),
+          "no material carries a level (that path loses batches on export)")
+
+    text = xp2b_text()
+    if text is None:
+        print("  note XP2B not available", flush=True)
+        return
+    levels = ["\t".join(l.split()) for l in text.split("\n")
+              if l.split()[:1] and l.split()[0].startswith("ATTR_light_level")]
+    check("ATTR_light_level\t0\t1\tsim/cockpit2/electrical/"
+          "panel_brightness_ratio[0]" in levels
+          and "ATTR_light_level\t0\t1\tlaminar/c90/warning/gear_handle"
+          in levels,
+          "XP2B writes both levels, the panel batch's included: %r" % (levels,))
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     import io_scene_xplane_obj as MOD
@@ -381,6 +475,7 @@ def main():
     case_metalness(XM)
     case_texture_map(XM)
     case_classic(XM)
+    case_light_level(XM)
 
     print("\nRESULT: %s (%d failure(s))" % ("PASS" if not fails else "FAIL", len(fails)))
     for f in fails:
