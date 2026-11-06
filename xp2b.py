@@ -1418,6 +1418,25 @@ def convert(context, headers, report=None):
             coll["xp2b_convert_warnings"] = json.dumps(warnings)
             header["xp2b_convert_warnings"] = len(warnings)
         _keep_source(coll, header)
+        # The header is the active object at this point, and deleting the
+        # active object leaves `context.active_object` as None.  XP2B's sidebar
+        # draw does not guard that (`context.active_object.xplane` on None), so
+        # a scene that imports perfectly still redraws into an AttributeError
+        # traceback in the 3D view.  Hand the selection to something that
+        # survives the deletion: the root Empty, else the first mesh.
+        # The header is a member of this very collection (conversion owns the
+        # one the import built), so it must not be picked as its own
+        # replacement -- that would assign a dead StructRNA after the removal.
+        # RNA wrappers are never identical objects, so compare by name.
+        survivors = [ob for ob in coll.objects if ob.name != header.name]
+        replacement = (next((ob for ob in survivors if ob.type == 'EMPTY'), None)
+                       or next((ob for ob in survivors if ob.type == 'MESH'), None))
         bpy.data.objects.remove(header, do_unlink=True)
+        if replacement is not None:
+            for ob in list(context.selected_objects):
+                if ob is not replacement:
+                    ob.select_set(False)
+            context.view_layer.objects.active = replacement
+            replacement.select_set(True)
         out.append(coll)
     return out
