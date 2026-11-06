@@ -34,6 +34,8 @@ paths_exclude_pattern = [
   "/.DS_Store",
   "/dist/",
   "/verify/",
+  "/docs/",     # the README links to these on GitHub; the add-on does not read
+                # them, and the extension platform renders only the README
   "/dev-link.sh",
   "/*.zip",
   "/*.gif",     # the README demo, 2 MB of it: GitHub can have it, the add-on
