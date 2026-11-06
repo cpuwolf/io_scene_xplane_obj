@@ -47,6 +47,12 @@ the add-on registers a file handler for `.obj`.
 * `TEXTURE` / `TEXTURE_LIT` / `TEXTURE_NORMAL` become a Principled material
   (base colour, emission, normal map), and the original *relative* texture paths
   (`../../objects/foo/bar.png`) are written back out unchanged;
+* the texture set also lands on the **XPlane2Blender layer** — Collection >
+  X-Plane > Textures: Default / Night / Normal-Specular, and on 12.0+ Normal /
+  Material-Gloss / Gloss — plus `Normal Metalness` and `Blend Glass`. That is
+  where XP2B's exporter reads them from; the material graph is only the
+  viewport preview, so an imported object exported through XP2B used to come
+  out with **no** texture records at all;
 * the normal map is wired as the **combo map it actually is**, not as a plain
   normal map: `R,G` go into a Normal Map node behind a rebuilt `Z = 1`, the blue
   channel becomes Metallic (metalness mode only, i.e. `NORMAL_METALNESS`), and

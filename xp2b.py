@@ -738,6 +738,7 @@ class _Converter(object):
         coll.xplane.is_exportable_collection = True
         coll.xplane.layer.name = base
         coll.xplane.layer.export_type = "aircraft"
+        self._apply_texture_options(obj8, coll)
 
         leaf_objs = json.loads(header.get(XM.PROP_LEAF_OBJS, "[]"))
         leaf_states = json.loads(header.get(XM.PROP_LEAF_STATES, "[]"))
@@ -858,6 +859,42 @@ class _Converter(object):
                                 "on bones" % (len(self.specs), self.root.name,
                                               self.visibility_placed))
         return coll
+
+    def _apply_texture_options(self, obj8, coll):
+        """Hand the file's texture set to XPlane2Blender's layer.
+
+        XP2B does not read texture paths out of the material node tree: it
+        writes TEXTURE / TEXTURE_LIT / TEXTURE_NORMAL / TEXTURE_MAP from the
+        *layer* fields (Collection > X-Plane > Textures: Default, Night,
+        Normal/Specular, and on 12.0+ Normal, Material/Gloss, Gloss).  The
+        material graph this importer builds is the viewport preview; without
+        these fields an imported object exports with no textures at all.
+
+        Paths are stored **as the file spells them**.  An OBJ's texture names
+        are relative to the .obj itself and the sim resolves them the same way,
+        so keeping `livery_NML.png` short is what makes the written path match
+        the source; absolutising it only produces a 15-level `../../..` once
+        XP2B relativises it against an export directory.  XP2B relativises
+        whatever it is given against the .obj's output directory, so a file
+        kept next to its textures lands back as the same one-word name.
+        """
+        layer = coll.xplane.layer
+
+        def first(words):
+            return words[0] if words else ""
+
+        tex = obj8.global_value("TEXTURE")
+        lit = obj8.global_value("TEXTURE_LIT")
+        nrm = obj8.global_value("TEXTURE_NORMAL")
+        maps = XM.texture_map_usages(obj8)
+        layer.texture = first(tex)
+        layer.texture_lit = first(lit)
+        layer.texture_normal = first(nrm)
+        layer.texture_map_normal = maps.get("normal", "")
+        layer.texture_map_material_gloss = maps.get("material_gloss", "")
+        layer.texture_map_gloss = maps.get("gloss", "")
+        layer.normal_metalness = obj8.global_value("NORMAL_METALNESS") is not None
+        layer.blend_glass = obj8.global_value("BLEND_GLASS") is not None
 
     def _report_dropped_commands(self, obj8):
         """Lights, LODs and IF blocks are commands XPlane2Blender cannot take

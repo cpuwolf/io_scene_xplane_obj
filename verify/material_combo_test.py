@@ -126,6 +126,35 @@ def fresh():
         bpy.data.materials.remove(mat)
 
 
+def layer_fields():
+    """The XP2B layer (collection) fields the exporter reads textures from."""
+    coll = next((c for c in bpy.data.collections
+                 if c.xplane.is_exportable_collection), None)
+    if coll is None:
+        return {}
+    L = coll.xplane.layer
+    return {"texture": L.texture, "lit": L.texture_lit, "nrm": L.texture_normal,
+            "map_normal": L.texture_map_normal,
+            "map_material_gloss": L.texture_map_material_gloss,
+            "map_gloss": L.texture_map_gloss,
+            "metal": L.normal_metalness, "glass": L.blend_glass}
+
+
+def xp2b_header():
+    """TEXTURE-ish records XP2B's own exporter would write, or None."""
+    try:
+        from io_xplane2blender.xplane_types import xplane_file as XF
+        files = XF.createFilesFromBlenderRootObjects(
+            bpy.context.scene, bpy.context.view_layer, False)
+        text = files[0].write()
+    except Exception:                                  # noqa: BLE001
+        return None
+    want = ("TEXTURE", "TEXTURE_LIT", "TEXTURE_NORMAL", "TEXTURE_MAP",
+            "NORMAL_METALNESS", "BLEND_GLASS")
+    return ["\t".join(l.split()) for l in text.split("\n")
+            if l.split()[:1] and l.split()[0] in want]
+
+
 def import_material(obj_path):
     try:
         bpy.ops.import_scene.xplane_obj(filepath=obj_path)
@@ -258,6 +287,20 @@ def case_metalness(XM):
     check(tex["TEXTURE_NORMAL"] == "nrm.png",
           "write-back still names the normal map: %r" % tex["TEXTURE_NORMAL"])
 
+    # the exporter reads its textures from the layer, not from the node tree:
+    # without these fields an imported object exports with no textures at all
+    L = layer_fields()
+    check(L.get("texture") == "alb.png" and L.get("nrm") == "nrm.png",
+          "XP2B layer textures: %r" % (L,))
+    check(L.get("metal") is True, "XP2B layer has NORMAL_METALNESS: %r" % (L,))
+    head = xp2b_header()
+    if head is None:
+        print("  note XP2B not available, layer fields only", flush=True)
+    else:
+        check("TEXTURE\talb.png" in head and "TEXTURE_NORMAL\tnrm.png" in head
+              and "NORMAL_METALNESS" in head,
+              "XP2B writes the texture records: %r" % (head,))
+
 
 def case_texture_map(XM):
     print("\n== TEXTURE_MAP normal + material_gloss (XP12.1, the A330 layout)",
@@ -285,6 +328,16 @@ def case_texture_map(XM):
     check(close(rough[0], 1.0 - MAP_MAT[1] / 255.0),
           "roughness %.4f == 1 - material G %.4f" % (rough[0], 1.0 - MAP_MAT[1] / 255.0))
 
+    L = layer_fields()
+    check(L.get("nrm") == "" and L.get("map_normal") == "nrm.png"
+          and L.get("map_material_gloss") == "mat.png",
+          "XP2B layer holds the 12.1 split, not the classic field: %r" % (L,))
+    head = xp2b_header()
+    if head is not None:
+        check("TEXTURE_MAP\tnormal\tnrm.png" in head
+              and "TEXTURE_MAP\tmaterial_gloss\tmat.png" in head,
+              "XP2B writes TEXTURE_MAP: %r" % (head,))
+
 
 def case_classic(XM):
     print("\n== TEXTURE_NORMAL without NORMAL_METALNESS (XP10/11: RGB is the vector)",
@@ -306,6 +359,10 @@ def case_classic(XM):
           % getattr(getattr(src, "image", None), "filepath", None))
     check(not bsdf.inputs['Metallic'].is_linked, "metallic left alone")
     check(not bsdf.inputs['Roughness'].is_linked, "specular strength is not gloss")
+    L = layer_fields()
+    check(L.get("nrm") == "nrm.png" and L.get("metal") is False,
+          "XP2B layer gets the map with metalness off (this file has no "
+          "NORMAL_METALNESS): %r" % (L,))
 
 
 def main():
