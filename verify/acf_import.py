@@ -13,6 +13,10 @@ copy (a `--factory-startup` session has no add-on registered at all).
 What it grades: the operator finishes, it produced one exportable collection per
 .obj in the .acf, and the meshes/armatures are there.  `--no-xp2b` skips the
 conversion, which is the slow half and only needs XP2B.
+
+In `-b` the operator takes its synchronous path: background mode has no event
+loop, so the modal handler (status text, progress bar, ESC) only runs in a GUI
+session - see docs/development.md.
 """
 import importlib.util
 import os

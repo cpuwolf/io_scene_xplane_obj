@@ -32,6 +32,20 @@ editing rather than whatever is installed; add `--no-xp2b` to skip the
 conversion (it then also checks that the import says *why* there is no exportable
 collection instead of failing quietly).
 
+**The `.acf` import is modal, and `-b` cannot run a modal.** Background mode has a
+`Window` object but no event loop, so `context.window is None` is False there and a
+modal handler would import exactly one object and stall - the operator therefore
+drains synchronously when `bpy.app.background` is set, which is what
+`acf_import.py` exercises. To grade the modal path (status text, progress bar, ESC
+cancel) it has to be a **GUI** session: wrap `IMPORT_OT_xplane_acf.modal` to hand
+the real handler a stand-in `type='ESC'` event after N objects, wrap `_finish` to
+record `(result, made, total, done, stopped)`, and drive a `bpy.app.timers`
+poller that prints the exportable-collection count and calls
+`bpy.ops.wm.quit_blender()` when the run ends. Measured that way on the SR22:
+`RUNNING_MODAL` immediately, collections 2 → 3 → 5 → 7 → 11 → 13 over 23 s, then
+`FINISHED` 13/13; with the injected ESC, `CANCELLED` at 3/13 and those three
+collections stay.
+
 Two probes print instead of asserting, which is what you want when a real file
 misbehaves:
 

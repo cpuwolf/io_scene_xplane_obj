@@ -53,6 +53,12 @@ _obja/0/_v10_att_file_stl ../Cessna_172SP_cockpit.obj
   it does not stop the import.
 * The `.acf` is **only read**. Laminar asks that add-ons not write the format,
   because it changes between sim versions, and this importer has no reason to.
+* **It takes a while (13 to 113 objects), so it reports where it is**: the status
+  bar reads `X-Plane .acf  12/42  <file>` with the progress bar moving, one object
+  per tick, and **ESC** stops between two files — the objects that already landed
+  stay in the scene. The step size is one `.obj`, so the one genuinely slow file
+  (an A330 cockpit conversion is minutes on its own) still holds the window; the
+  status bar then names the file it is on.
 
 What is *not* taken from the `.acf`: the per-object attach offsets and rotations
 (`_v10_att_x/y/z_acf_prt_ref`), the hide datarefs, and anything a livery adds.

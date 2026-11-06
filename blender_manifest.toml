@@ -6,7 +6,7 @@ schema_version = "1.0.0"
 # extensions/<repo>/io_scene_xplane_obj/.
 
 id = "io_scene_xplane_obj"
-version = "0.10.0"
+version = "0.10.1"
 name = "X-Plane OBJ8 Object"
 tagline = "Import X-Plane .obj or .acf into a scene XPlane2Blender exports"
 maintainer = "Wei Shuai"

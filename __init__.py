@@ -119,6 +119,33 @@ def _import_objects(context, paths, report, coll=None):
     return made, tri_count, headers
 
 
+_XP2B_MISSING = ("XPlane2Blender is not installed/enabled: the file was "
+                 "imported, but there is no exportable collection for "
+                 "its exporter to write. Install XPlane2Blender and "
+                 "import again")
+
+
+def _convert(context, headers, report):
+    """The exportable collections built for these headers ([] if XP2B cannot).
+
+    Split out of `_build_xp2b` because the .acf import converts one object at a
+    time - one file per step is the granularity a progress report can show.
+    """
+    from . import xp2b as XC
+
+    if not headers:
+        return []
+    if not XC.available():
+        report({'ERROR'}, _XP2B_MISSING)
+        return []
+    try:
+        return XC.convert(context, headers, report)
+    except Exception as exc:                              # noqa: BLE001
+        report({'ERROR'},
+               "could not build the XPlane2Blender scene: %s" % exc)
+        return []
+
+
 def _build_xp2b(context, headers, report):
     """The authoring scene XPlane2Blender's exporter reads.
 
@@ -128,25 +155,10 @@ def _build_xp2b(context, headers, report):
     That is why it is not optional: the exported scene *is* this add-on's
     output.
     """
-    from . import xp2b as XC
-
-    if not headers:
-        return
-    if not XC.available():
-        report({'ERROR'},
-               "XPlane2Blender is not installed/enabled: the file was "
-               "imported, but there is no exportable collection for "
-               "its exporter to write. Install XPlane2Blender and "
-               "import again")
-        return
-    try:
-        colls = XC.convert(context, headers, report)
-    except Exception as exc:                              # noqa: BLE001
-        report({'ERROR'},
-               "could not build the XPlane2Blender scene: %s" % exc)
-        return
-    report({'INFO'}, "ready to export with XPlane2Blender: %s"
-           % ", ".join(c.name for c in colls))
+    colls = _convert(context, headers, report)
+    if colls:
+        report({'INFO'}, "ready to export with XPlane2Blender: %s"
+               % ", ".join(c.name for c in colls))
 
 
 @_add
@@ -238,6 +250,11 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
 
     The .acf is only read: it lists the objects in `_obja/<slot>/_v10_att_file_stl`
     and this imports them the same way as dropping each .obj by hand.
+
+    One aircraft is 13 to 113 objects, which is minutes of work and would leave
+    the window frozen with no sign of life - so the import runs *modal*, one file
+    per timer tick: the status bar shows `12/42 <file>` and its progress bar
+    moves, and ESC stops between two files (what already landed stays).
     """
     bl_idname = "import_scene.xplane_acf"
     bl_label = "X-Plane Aircraft (.acf)"
@@ -317,13 +334,121 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
                         % os.path.basename(acfs[0]))
             return {'CANCELLED'}
 
-        made, tri_count, headers = _import_objects(context, paths, self.report)
-        if not made:
+        from . import xp2b as XC
+
+        self._queue = list(paths)
+        self._total = len(paths)
+        self._done = 0
+        self._made = 0
+        self._tris = 0
+        self._colls = []
+        self._timer = None
+        self._can_convert = XC.available()
+
+        context.window_manager.progress_begin(0, self._total)
+        self._tick(context)          # the first object straight away, so a
+                                     # small aircraft never waits for a tick
+        if not self._queue:
+            return self._finish(context)
+
+        window = context.window
+        if window is None or bpy.app.background:
+            # Nothing will deliver the TIMER events a modal handler waits for -
+            # `blender -b` has a window object but no event loop, so a modal here
+            # would import one object and hang. Run the rest out synchronously.
+            while self._queue:
+                self._tick(context)
+            return self._finish(context)
+
+        self._timer = context.window_manager.event_timer_add(0.05,
+                                                             window=window)
+        context.window_manager.modal_handler_add(self)
+        return {'RUNNING_MODAL'}
+
+    def modal(self, context, event):
+        if event.type == 'ESC':
+            return self._finish(context, stopped=True)
+        if event.type != 'TIMER':
+            # keep the buttons and keys during the import: a stray click on the
+            # viewport in the middle of a conversion is not helpful
+            return {'RUNNING_MODAL'}
+        self._tick(context)
+        if not self._queue:
+            return self._finish(context)
+        return {'RUNNING_MODAL'}
+
+    def _tick(self, context):
+        """`_step`, but a step that blows up must not kill the modal handler.
+
+        The queue entry was already popped, so the run still advances and the
+        timer is removed by `_finish` - a dangling timer would keep calling into
+        a half-built scene.
+        """
+        try:
+            self._step(context)
+        except Exception as exc:                          # noqa: BLE001
+            self.report({'ERROR'}, "one object was skipped after an error: %s"
+                        % exc)
+
+    def _status(self, context, text):
+        """Status-bar text; `context.workspace` is absent in some contexts."""
+        workspace = getattr(context, "workspace", None)
+        if workspace is not None:
+            workspace.status_text_set(text)
+
+    def _step(self, context):
+        """Import one .obj, convert it, and say which object that was."""
+        path = self._queue.pop(0)
+        self._done += 1
+        name = os.path.basename(path)
+        self._status(context, "X-Plane .acf  %d/%d  %s   (ESC to stop)"
+                     % (self._done, self._total, name))
+        print("xplane_obj: importing %s (%d/%d)"
+              % (path, self._done, self._total), flush=True)
+        try:
+            header = XM.import_file(context, path, report=self.report,
+                                    preview_rig=False)
+        except (ValueError, OSError) as exc:
+            self.report({'ERROR'}, "%s: %s" % (name, exc))
+        else:
+            if header is not None:
+                self._made += 1
+                for part in XM.parts(header):
+                    if part.type == 'MESH' and \
+                            part.get(XM.PROP_ROLE) == XM.ROLE_TRIS:
+                        self._tris += len(part.data.loop_triangles) or (
+                            len(part.data.polygons))
+                if self._can_convert:
+                    # per object, not one call at the end: the conversion is
+                    # part of this step, so the progress count is honest
+                    self._colls.extend(_convert(context, [header], self.report))
+        context.window_manager.progress_update(self._done)
+
+    def _finish(self, context, stopped=False):
+        window_manager = context.window_manager
+        if self._timer is not None:
+            window_manager.event_timer_remove(self._timer)
+            self._timer = None
+        window_manager.progress_end()
+        self._status(context, None)
+        left = len(self._queue)
+        self._queue = []
+
+        if self._made and not self._can_convert:
+            self.report({'ERROR'}, _XP2B_MISSING)
+        if stopped or left:
+            self.report({'WARNING'},
+                        "stopped after %d of the %d object(s): %d imported"
+                        % (self._done, self._total, self._made))
+            return {'CANCELLED'}
+        if not self._made:
             self.report({'ERROR'}, "nothing imported")
             return {'CANCELLED'}
         self.report({'INFO'}, "imported %d of the %d object(s) an .acf "
-                    "attaches, %d triangles" % (made, len(paths), tri_count))
-        _build_xp2b(context, headers, self.report)
+                    "attaches, %d triangles%s"
+                    % (self._made, self._total, self._tris,
+                       ", %d exportable collection(s)" % len(self._colls)
+                       if self._colls else ""))
         return {'FINISHED'}
 
 
