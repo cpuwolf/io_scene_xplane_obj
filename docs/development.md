@@ -15,6 +15,7 @@ debugged without starting Blender.
 ```sh
 python3 verify/test_fixture.py                     # pinned parser expectations
 python3 verify/test_anim.py                        # ANIM_* evaluator, no Blender
+python3 verify/test_acf.py                         # .acf -> object paths, no Blender
 
 blender -b --factory-startup --python verify/material_combo_test.py   # combo map, texture + light-level fields, XP2B output
 blender -b --factory-startup --python verify/check_bones_xp2b.py -- <file.obj>  # animation -> bones -> XP2B
@@ -23,7 +24,13 @@ blender -b --factory-startup --python verify/check_placement.py -- <file.obj>   
 blender -b --factory-startup --python verify/check_where_anim.py -- <file.obj>  # which block a batch hangs under
 blender -b --factory-startup --python verify/check_scale.py -- <file.obj>       # measured against the real aircraft
 blender -b --factory-startup --python verify/xp2b_convert.py -- <file.obj>      # just the bridge, then print the warnings
+blender -b --factory-startup --python verify/acf_import.py -- <file.acf>        # one aircraft, every object it attaches
 ```
+
+`acf_import.py` loads this working tree by path, so it grades the code you are
+editing rather than whatever is installed; add `--no-xp2b` to skip the
+conversion (it then also checks that the import says *why* there is no exportable
+collection instead of failing quietly).
 
 Two probes print instead of asserting, which is what you want when a real file
 misbehaves:

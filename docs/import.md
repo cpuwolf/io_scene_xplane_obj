@@ -5,6 +5,9 @@ whole `objects/` directory, or drag `.obj` files from Explorer/Finder onto the
 3D viewport (the add-on registers a `.obj` file handler, one file or a
 multi-selection).
 
+Drop an aircraft's **`.acf`** and every object that aircraft attaches is
+imported — see [the whole aircraft](#the-whole-aircraft-from-an-acf) below.
+
 ## One file, one tree, named after the file
 
 ```
@@ -23,6 +26,38 @@ C90B_cockpit.obj                 collection — the exportable XPlane2Blender la
   per-batch identity, and it carries the batch index in `xp8_leaf`.
 * The XP2B *layer* keeps the bare stem too: XPlane2Blender turns the layer name
   into the exported file name, so it stays `C90B_cockpit` → `C90B_cockpit.obj`.
+
+## The whole aircraft, from an `.acf`
+
+**File > Import > X-Plane Aircraft (.acf)** — or drop the `.acf` itself.
+The `.acf` is X-Plane's text aircraft file; every attached object is one line in
+it, and each becomes the same tree a hand-dropped `.obj` gives:
+
+```
+_obja/0/_v10_att_file_stl ../Cessna_172SP_cockpit.obj
+```
+
+* **Objects are found the way X-Plane finds them**: relative to the aircraft
+  folder, then to its `objects/` subfolder. Both are needed in real files —
+  `../X.obj` reaches *out of* `objects/`, `X.obj` reaches *into* it, and a
+  resolver that only joins against the `.acf`'s own folder finds almost nothing
+  (Laminar C172: 0 of 42).
+* **Slot order is import order.** The file writes its properties alphabetically
+  (`_obja/10` before `_obja/2`); the slot number is the order Plane-Maker
+  attached them in, so that is what is used.
+* **The same `.obj` in two slots is imported once.** Aircraft attach one file to
+  several slots, and two `.acf` files of one family (a base and a `_seaplane`
+  variant) share objects; a second copy would be an identical collection nothing
+  refers to.
+* A listed object that is **not on disk** is reported as a warning and skipped —
+  it does not stop the import.
+* The `.acf` is **only read**. Laminar asks that add-ons not write the format,
+  because it changes between sim versions, and this importer has no reason to.
+
+What is *not* taken from the `.acf`: the per-object attach offsets and rotations
+(`_v10_att_x/y/z_acf_prt_ref`), the hide datarefs, and anything a livery adds.
+The objects come in at their own origin, exactly as if you had imported the
+`.obj` files one by one.
 
 ## Geometry
 
@@ -87,7 +122,7 @@ damage it.
 
 | property | contents |
 | --- | --- |
-| `xp8_dump` | the whole original file, for a byte-identical write-back |
+| `xp8_dump` | the whole original file; the conversion re-reads it for the command stream |
 | `xp8_events` | ordered command stream: `["A"]` ANIM_begin, `["Z"]` ANIM_end, `["R", line]` any command verbatim, `["L", n]` geometry batch `n` |
 | `xp8_globals` | `TEXTURE` / `POINT_COUNTS` / `GLOBAL_*` lines |
 | `xp8_leaf_states` | the `ATTR_*` snapshot each batch draws under |

@@ -4,9 +4,13 @@ Import an [X-Plane OBJ8](https://developer.x-plane.com/article/obj8-file-format-
 `.obj` into a Blender scene that [XPlane2Blender](https://github.com/X-Plane/XPlane2Blender)
 writes back out — geometry, materials, animations, manipulators and lights.
 
-**File > Import > X-Plane OBJ8 (.obj)**, edit, **File > Export > X-Plane Object
-(.obj)**. There is no convert step to remember and nothing to set up per file:
-the import builds the XPlane2Blender collection itself.
+**File > Import > X-Plane OBJ8 (.obj)** (or just drag the file onto the
+viewport), edit, **File > Export > X-Plane Object (.obj)**. There is no convert
+step to remember and nothing to set up per file: the import builds the
+XPlane2Blender collection itself.
+
+Drop an aircraft's **`.acf`** instead and every object it attaches is imported in
+one go — the whole aircraft, not one part of it.
 
 ![Importing an X-Plane OBJ8 object into Blender](blender_import_demo.gif)
 
@@ -48,6 +52,7 @@ Details, installing from source and uninstalling: [docs/install.md](https://gith
 | Cockpit panels, manipulators, light levels? | `ATTR_cockpit*`, `ATTR_manip_*`, `ATTR_light_level`, `ATTR_draw_disable`, `ATTR_solid_camera` all land on the XPlane2Blender material/object/layer fields they belong to. |
 | Texture paths in the exported file? | The texture set is also written onto the XP2B **layer**, which is where its exporter reads them from. |
 | Files the sim loads but exporters mangle? | A missing `POINT_COUNTS` and trailing `#` comments are both tolerated. |
+| The whole aircraft at once? | Drag its **`.acf`** onto the viewport: every `.obj` the aircraft attaches is imported, one collection each. The `.acf` itself is only read. |
 
 ## Docs
 

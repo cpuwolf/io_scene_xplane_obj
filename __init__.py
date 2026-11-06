@@ -71,6 +71,7 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
 from bpy_extras.io_utils import (ExportHelper, ImportHelper,
                                  poll_file_object_drop)
 
+from . import acfcodec as AF
 from . import objcodec as OC
 from . import xpanim as XA
 from . import xpmesh as XM
@@ -86,6 +87,67 @@ def _add(cls):
 # ---------------------------------------------------------------------------
 # import
 # ---------------------------------------------------------------------------
+
+def _import_objects(context, paths, report, coll=None):
+    """Import every path into the scene; (files imported, triangles, headers).
+
+    Shared by the .obj operator (one file, a dropped multi-selection or a whole
+    folder) and the .acf operator (every object an aircraft attaches), so the
+    two cannot drift apart in how a file becomes a header, or in what they count.
+    """
+    made = 0
+    tri_count = 0
+    headers = []
+    for p in paths:
+        print("xplane_obj: importing %s" % p, flush=True)
+        try:
+            header = XM.import_file(context, p, into_collection=coll,
+                                    report=report, preview_rig=False)
+        except (ValueError, OSError) as exc:
+            report({'ERROR'}, "%s: %s" % (os.path.basename(p), exc))
+            continue
+        if header is None:
+            continue
+        made += 1
+        headers.append(header)
+        for part in XM.parts(header):
+            if part.type == 'MESH' and part.get(XM.PROP_ROLE) == XM.ROLE_TRIS:
+                tri_count += len(part.data.loop_triangles) or (
+                    len(part.data.polygons))
+        if coll is not None:
+            header.hide_viewport = True
+    return made, tri_count, headers
+
+
+def _build_xp2b(context, headers, report):
+    """The authoring scene XPlane2Blender's exporter reads.
+
+    Its export operator only writes collections marked exportable, and this
+    importer builds none - so without this step File > Export > X-Plane
+    Object (.obj) stops with "Could not find any Exportable Collections".
+    That is why it is not optional: the exported scene *is* this add-on's
+    output.
+    """
+    from . import xp2b as XC
+
+    if not headers:
+        return
+    if not XC.available():
+        report({'ERROR'},
+               "XPlane2Blender is not installed/enabled: the file was "
+               "imported, but there is no exportable collection for "
+               "its exporter to write. Install XPlane2Blender and "
+               "import again")
+        return
+    try:
+        colls = XC.convert(context, headers, report)
+    except Exception as exc:                              # noqa: BLE001
+        report({'ERROR'},
+               "could not build the XPlane2Blender scene: %s" % exc)
+        return
+    report({'INFO'}, "ready to export with XPlane2Blender: %s"
+           % ", ".join(c.name for c in colls))
+
 
 @_add
 class IMPORT_OT_xplane_obj(bpy.types.Operator, ImportHelper):
@@ -159,62 +221,110 @@ class IMPORT_OT_xplane_obj(bpy.types.Operator, ImportHelper):
             coll = bpy.data.collections.new(name)
             context.scene.collection.children.link(coll)
 
-        made = 0
-        tri_count = 0
-        headers = []
-        for p in paths:
-            try:
-                header = XM.import_file(context, p, into_collection=coll,
-                                        report=self.report,
-                                        preview_rig=False)
-            except (ValueError, OSError) as exc:
-                self.report({'ERROR'}, "%s: %s" % (os.path.basename(p), exc))
-                continue
-            if header is None:
-                continue
-            made += 1
-            headers.append(header)
-            for part in XM.parts(header):
-                if part.type == 'MESH' and part.get(XM.PROP_ROLE) == XM.ROLE_TRIS:
-                    tri_count += len(part.data.loop_triangles) or (
-                        len(part.data.polygons))
-            if coll is not None:
-                header.hide_viewport = True
-
+        made, tri_count, headers = _import_objects(context, paths, self.report,
+                                                   coll)
         if not made:
             self.report({'ERROR'}, "nothing imported")
             return {'CANCELLED'}
         self.report({'INFO'}, "imported %d file(s), %d triangles"
                     % (made, tri_count))
-        self._build_xp2b(context, headers)
+        _build_xp2b(context, headers, self.report)
         return {'FINISHED'}
 
-    def _build_xp2b(self, context, headers):
-        """The authoring scene XPlane2Blender's exporter reads.
 
-        Its export operator only writes collections marked exportable, and this
-        importer builds none - so without this step File > Export > X-Plane
-        Object (.obj) stops with "Could not find any Exportable Collections".
-        That is why it is not optional: the exported scene *is* this add-on's
-        output.
-        """
-        from . import xp2b as XC
+@_add
+class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
+    """Import every OBJ8 object an X-Plane aircraft (.acf) attaches
 
-        if not XC.available():
+    The .acf is only read: it lists the objects in `_obja/<slot>/_v10_att_file_stl`
+    and this imports them the same way as dropping each .obj by hand.
+    """
+    bl_idname = "import_scene.xplane_acf"
+    bl_label = "X-Plane Aircraft (.acf)"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    filename_ext = ".acf"
+    filter_glob: StringProperty(default="*.acf", options={'HIDDEN'})
+
+    # same reason as the .obj operator: a dropped file arrives with the path
+    # already set, and a stale path must not be re-imported from the menu
+    filepath: StringProperty(
+        name="File Path",
+        description="Filepath used for importing the file",
+        maxlen=1024, subtype='FILE_PATH', options={'SKIP_SAVE'})
+    directory: StringProperty(
+        subtype='DIR_PATH', options={'SKIP_SAVE', 'HIDDEN'})
+    files: CollectionProperty(
+        name="File Path", type=bpy.types.OperatorFileListElement,
+        options={'SKIP_SAVE', 'HIDDEN'})
+
+    def invoke(self, context, event):
+        if self.properties.is_property_set("filepath") or len(self.files):
+            return self.execute(context)
+        context.window_manager.fileselect_add(self)
+        return {'RUNNING_MODAL'}
+
+    def _acfs(self):
+        """The .acf files this call is about: a dropped selection, or one path."""
+        if len(self.files):
+            paths = [os.path.join(self.directory, f.name) for f in self.files
+                     if f.name.lower().endswith(".acf")]
+            paths.sort()
+        elif self.filepath:
+            paths = [self.filepath]
+        else:
+            paths = []
+        return [p for p in paths if os.path.isfile(p)]
+
+    def execute(self, context):
+        acfs = self._acfs()
+        if not acfs:
+            self.report({'ERROR'}, "not a file: %s" % (self.filepath or
+                                                       "no .acf selected"))
+            return {'CANCELLED'}
+
+        paths = []
+        seen = set()
+        missing = []
+        for acf in acfs:
+            try:
+                found, gone = AF.objects(acf)
+            except (OSError, ValueError) as exc:
+                self.report({'ERROR'}, "%s: %s" % (os.path.basename(acf), exc))
+                continue
+            # two .acf of the same family (Cessna_172SP.acf and its _seaplane
+            # variant) share objects; importing a file twice would build two
+            # identical collections, one of which nothing refers to
+            for found_path in found:
+                key = os.path.normcase(found_path)
+                if key in seen:
+                    continue
+                seen.add(key)
+                paths.append(found_path)
+            missing.extend(gone)
+
+        if missing:
+            shown = ", ".join(missing[:4])
+            if len(missing) > 4:
+                shown += ", ..."
+            self.report({'WARNING'},
+                        "%d object(s) listed in the .acf are not on disk "
+                        "(moved, or a livery/extra that never shipped): %s"
+                        % (len(missing), shown))
+        if not paths:
             self.report({'ERROR'},
-                        "XPlane2Blender is not installed/enabled: the file was "
-                        "imported, but there is no exportable collection for "
-                        "its exporter to write. Install XPlane2Blender and "
-                        "import again")
-            return
-        try:
-            colls = XC.convert(context, headers, self.report)
-        except Exception as exc:                          # noqa: BLE001
-            self.report({'ERROR'},
-                        "could not build the XPlane2Blender scene: %s" % exc)
-            return
-        self.report({'INFO'}, "ready to export with XPlane2Blender: %s"
-                    % ", ".join(c.name for c in colls))
+                        "%s attaches no .obj that could be found"
+                        % os.path.basename(acfs[0]))
+            return {'CANCELLED'}
+
+        made, tri_count, headers = _import_objects(context, paths, self.report)
+        if not made:
+            self.report({'ERROR'}, "nothing imported")
+            return {'CANCELLED'}
+        self.report({'INFO'}, "imported %d of the %d object(s) an .acf "
+                    "attaches, %d triangles" % (made, len(paths), tri_count))
+        _build_xp2b(context, headers, self.report)
+        return {'FINISHED'}
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +344,24 @@ class FILE_HANDLER_OT_xplane_obj(bpy.types.FileHandler):
     bl_label = "X-Plane OBJ8 Object"
     bl_import_operator = "import_scene.xplane_obj"
     bl_file_extensions = ".obj"
+
+    @classmethod
+    def poll_drop(cls, context):
+        return poll_file_object_drop(context)
+
+
+@_add
+class FILE_HANDLER_OT_xplane_acf(bpy.types.FileHandler):
+    """Dropping an aircraft's .acf imports every object it attaches.
+
+    .acf is X-Plane's own aircraft format, so no other add-on claims it; the
+    drop is the shortest path from "which aircraft is this" to a scene with all
+    of its objects in it.
+    """
+    bl_idname = "IO_FH_xplane_acf"
+    bl_label = "X-Plane Aircraft"
+    bl_import_operator = "import_scene.xplane_acf"
+    bl_file_extensions = ".acf"
 
     @classmethod
     def poll_drop(cls, context):
@@ -561,6 +689,8 @@ def _json_list(raw):
 
 def _menu_import(self, context):
     self.layout.operator(IMPORT_OT_xplane_obj.bl_idname, text="X-Plane OBJ8 (.obj)")
+    self.layout.operator(IMPORT_OT_xplane_acf.bl_idname,
+                         text="X-Plane Aircraft (.acf, all objects)")
 
 
 def register():
