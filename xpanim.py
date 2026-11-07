@@ -39,7 +39,7 @@ import math
 
 try:                          # inside the Blender extension package
     from . import objcodec as OC
-except ImportError:           # standalone: verify/ puts the repo on sys.path
+except ImportError:           # loaded as a plain module by verify/test_anim.py
     import objcodec as OC
 
 #: rotation that carries X-Plane axes (x east, y up, z south) onto Blender's

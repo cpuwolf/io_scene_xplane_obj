@@ -6,7 +6,7 @@ schema_version = "1.0.0"
 # extensions/<repo>/io_scene_xplane_obj/.
 
 id = "io_scene_xplane_obj"
-version = "0.10.2"
+version = "0.10.3"
 name = "X-Plane OBJ8 Object"
 tagline = "Import X-Plane .obj or .acf into a scene XPlane2Blender exports"
 maintainer = "Wei Shuai"
@@ -21,10 +21,17 @@ blender_version_min = "4.2.0"
 
 copyright = ["2026 Wei Shuai"]
 
-# Build settings.  Only the shipped add-on belongs in the package: the test
-# scripts, the dev symlink helper and CI config stay in the repository.
-# (No [permissions] table: the add-on touches no network, clipboard or camera
-# and reads and writes the .obj files the user opens, so nothing to declare.)
+# The add-on reads the .obj / .acf files the user opens (and writes none of them),
+# which is what the `files` permission covers - the extension platform expects it
+# for any add-on that touches the file system outside its own directory.
+[permissions]
+files = "Import X-Plane .obj and .acf files that you pick from disk"
+
+# Build settings.  Only the shipped add-on belongs in the package: the verify /
+# dev scripts, the dev symlink helper and the CI config stay in the repository.
+# (`/scripts/` is excluded on purpose: those probes put this repository on
+# sys.path and import modules into the global namespace, which the extension
+# guidelines forbid inside a package - they are developer tools, not add-on code.)
 [build]
 paths_exclude_pattern = [
   "__pycache__/",
@@ -34,6 +41,7 @@ paths_exclude_pattern = [
   "/.DS_Store",
   "/dist/",
   "/verify/",
+  "/scripts/",
   "/docs/",     # the README links to these on GitHub; the add-on does not read
                 # them, and the extension platform renders only the README
   "/dev-link.sh",
