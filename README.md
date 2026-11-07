@@ -23,23 +23,15 @@ C90B_cockpit.obj                 collection — the exportable XPlane2Blender la
 
 ## Install
 
-**1. XPlane2Blender** — the export side is its operator.
+1. **Preferences > Get Extensions > search `X-Plane OBJ8` > Install.**
+   (No platform account yet? Drag the release zip onto Blender instead.)
+2. **Restart Blender.**
 
-Blender 5.x needs the armature build (the shipped releases are still 4.x):
+Blender 4.2 or newer.
 
-<https://github.com/cpuwolf/XPlane2Blender/archive/refs/tags/blender-5x-armature-v1.zip>
-
-Download it and use **Edit > Preferences > Get Extensions > ⌄ > Install from
-Disk…**, then enable **XPlane2Blender**. On Blender 4.2–4.5 the official
-XPlane2Blender from the extension platform works instead.
-
-**2. This add-on** — Preferences > Get Extensions > search **X-Plane OBJ8**, or
-drag `io_scene_xplane_obj-<version>.zip` into Blender. Blender 4.2 or newer.
-
-**Restart Blender** after installing or updating either one: their modules are
-loaded at startup, so an open window keeps running the old code.
-
-Details, installing from source and uninstalling: [docs/install.md](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/install.md).
+Exporting is [XPlane2Blender](https://github.com/X-Plane/XPlane2Blender)'s job, so
+install that too — which build to pick depends on your Blender version, one line in
+[docs/install.md](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/install.md).
 
 ## What people ask first
 
