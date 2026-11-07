@@ -12,6 +12,39 @@ XPlane2Blender collection itself.
 Drop an aircraft's **`.acf`** instead and every object it attaches is imported in
 one go — the whole aircraft, not one part of it.
 
+## The pipeline
+
+```
+X-Plane aircraft
+  .acf  →  every .obj it attaches
+  .obj  →  one object
+  folder of .obj files
+        │
+        │  ①  IMPORT — this add-on
+        │      File > Import, or drop the file on the viewport
+        ▼
+Blender
+  one exportable collection per .obj: geometry, materials, animations,
+  manipulators, cockpit panels — editable and previewable
+        │
+        │  ②  EDIT — Blender
+        ▼
+XPlane2Blender, revised build
+  File > Export > X-Plane Object (.obj)
+        │
+        │  ③  EXPORT — with the revised build, linked below
+        ▼
+X-Plane
+```
+
+The official XPlane2Blender release cannot do ③ on Blender 5.x: it writes no
+animations at all and reports no error, so the round trip only closes with the
+revised build —
+**[cpuwolf/XPlane2Blender, tag `blender-5x-armature-v1`](https://github.com/cpuwolf/XPlane2Blender/tree/blender-5x-armature-v1)**
+([download](https://github.com/cpuwolf/XPlane2Blender/archive/refs/tags/blender-5x-armature-v1.zip),
+[install steps](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/install.md)) —
+the same build this add-on is tested against.
+
 ![Importing an X-Plane OBJ8 object into Blender](blender_import_demo.gif)
 
 ```
