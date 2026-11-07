@@ -14,11 +14,8 @@ own operator, so it has to be installed first.
 > every part frozen and no error to explain it. The import in this add-on warns
 > once when it recognises that build.
 
-**Blender 4.2 – 4.5** — the official build works: Preferences > Get Extensions >
-search *XPlane2Blender*.
-
-**Blender 5.x** — there is no extension build of it yet, so use the armature
-build:
+**Blender 5.x** — there is no extension build of XPlane2Blender yet, so use the
+armature build:
 
 ```
 https://github.com/cpuwolf/XPlane2Blender/archive/refs/tags/blender-5x-armature-v1.zip
@@ -50,7 +47,7 @@ Any of these:
 | a release zip | download `io_scene_xplane_obj-<version>.zip` from the releases page and **drag it into Blender** |
 | from source | `git clone`, then `blender --command extension build --output-dir dist` and install the zip; `./dev-link.sh` symlinks the repo into Blender's user extensions instead, which is what you want while editing |
 
-Blender 4.2 or newer.
+Blender 5.0 or newer.
 
 ## Restart Blender
 

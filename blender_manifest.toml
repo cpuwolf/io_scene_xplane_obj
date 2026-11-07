@@ -6,7 +6,7 @@ schema_version = "1.0.0"
 # extensions/<repo>/io_scene_xplane_obj/.
 
 id = "io_scene_xplane_obj"
-version = "0.10.6"
+version = "0.10.7"
 name = "X-Plane OBJ8 Object"
 tagline = "Import X-Plane .obj or .acf into a scene XPlane2Blender exports"
 maintainer = "Wei Shuai"
@@ -17,7 +17,7 @@ tags = ["Import-Export"]
 website = "https://github.com/cpuwolf/io_scene_xplane_obj"
 license = ["SPDX:GPL-3.0-or-later"]
 
-blender_version_min = "4.2.0"
+blender_version_min = "5.0.0"
 
 copyright = ["2026 Wei Shuai"]
 

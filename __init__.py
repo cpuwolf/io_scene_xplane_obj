@@ -139,7 +139,7 @@ _warned_wrong_build = False
 def _check_xp2b_build(report):
     """Warn once when the enabled XPlane2Blender cannot handle this Blender."""
     global _warned_wrong_build
-    if _warned_wrong_build or bpy.app.version < (5, 0, 0):
+    if _warned_wrong_build:
         return
     from . import xp2b as XC
 

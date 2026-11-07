@@ -60,7 +60,7 @@ C90B_cockpit.obj                 collection — the exportable XPlane2Blender la
    (No platform account yet? Drag the release zip onto Blender instead.)
 2. **Restart Blender.**
 
-Blender 4.2 or newer.
+Blender 5.0 or newer.
 
 Exporting is [XPlane2Blender](https://github.com/X-Plane/XPlane2Blender)'s job, so
 install that too — and on Blender 5.x it must be the **armature build**, not the
