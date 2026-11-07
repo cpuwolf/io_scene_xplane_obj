@@ -86,6 +86,19 @@ def available():
     return True
 
 
+def bone_support():
+    """True when the enabled XPlane2Blender is the armature build.
+
+    Bone datarefs (`bone.xplane.datarefs`) are what that build adds, and it is
+    the only XPlane2Blender that works on Blender 5.x: every release up to 4.5.0
+    still reads `Action.groups` and `Action.fcurves`, which Blender 5 deleted,
+    and that failure is silent - the export finishes and writes no ANIM block at
+    all.  A scene converted here and exported with the old build looks perfect in
+    Blender and ships an aircraft with no moving parts.
+    """
+    return "xplane" in bpy.types.Bone.bl_rna.properties
+
+
 # ---------------------------------------------------------------------------
 # small builders
 # ---------------------------------------------------------------------------

@@ -58,6 +58,35 @@ blender -b --factory-startup --python scripts/material_probe.py -- <file.obj>   
 enable it itself (`bpy.ops.preferences.addon_enable(module="io_xplane2blender")`)
 or it will report "the file was imported, but there is no exportable collection".
 
+## The pinned test environment
+
+Everything in this repository was verified on one setup; regressions are usually
+a version skew away, so match it before believing a bug report.
+
+| | |
+| --- | --- |
+| OS | macOS 26.5 (25F71), Apple silicon |
+| Blender | 5.2.2 LTS, 2026-09-15, hash `d13f752e3b9c` |
+| XPlane2Blender | 4.5.0 armature build, tag `blender-5x-armature-v1` (commit `bbbf32e`), installed as the legacy add-on `scripts/addons/io_xplane2blender` |
+| X-Plane | 12.4.3-r2 (build 124311), `~/X-Plane 12` — the aircraft in `Laminar Research/` are the test files |
+
+The armature build is archived outside this repository, because it is the only
+XPlane2Blender that works on Blender 5.x and it exists only as a tag on a fork:
+
+```
+~/GitHub/xplane-addons-mirror/XPlane2Blender-blender-5x-armature-v1.zip
+  29 MB, the untouched GitHub source archive of the tag
+  sha256 c96050f8e7bb91325b1e6554da1c08ab9d9be7dfc52854b4939a678f0a69ae3f
+~/GitHub/xplane-addons-mirror/io_xplane2blender.zip
+  1.6 MB, the same code repackaged so Blender accepts it (root is
+  `io_xplane2blender/__init__.py`; the source archive's root is the whole repo,
+  which `addon_install` rejects)
+  sha256 554297031c3062b1a5fd25fda675a20e5746659e4df36e410f93487e80692dbc
+```
+
+Neither can be rebuilt from this repository: keep both copies, and put them on a
+release if the fork's tag ever goes away.
+
 ## Releasing
 
 1. bump `version` in `blender_manifest.toml`

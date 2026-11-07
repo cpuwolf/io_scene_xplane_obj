@@ -30,7 +30,11 @@ C90B_cockpit.obj                 collection — the exportable XPlane2Blender la
 Blender 4.2 or newer.
 
 Exporting is [XPlane2Blender](https://github.com/X-Plane/XPlane2Blender)'s job, so
-install that too — which build to pick depends on your Blender version, one line in
+install that too — and on Blender 5.x it must be the **armature build**, not the
+official release: the official one still reads `Action.groups` /
+`Action.fcurves`, which Blender 5 removed, and then exports **no animations at
+all** with no error to show for it. That build, and the two commands to unpack
+it, are in
 [docs/install.md](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/install.md).
 
 ## What people ask first

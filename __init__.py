@@ -126,6 +126,29 @@ _XP2B_MISSING = ("XPlane2Blender is not installed/enabled: the file was "
                  "import again")
 
 
+# The armature build of XPlane2Blender is not optional on Blender 5.x, and the
+# wrong one fails silently on *export*, not here - so say it once, at the point
+# where the scene it would export is built.
+_XP2B_WRONG_BUILD = ("this XPlane2Blender is too old for Blender %d.x: it will "
+                     "export the scene without writing a single animation. Use "
+                     "the armature build (tag blender-5x-armature-v1 of "
+                     "cpuwolf/XPlane2Blender) - see docs/install.md")
+_warned_wrong_build = False
+
+
+def _check_xp2b_build(report):
+    """Warn once when the enabled XPlane2Blender cannot handle this Blender."""
+    global _warned_wrong_build
+    if _warned_wrong_build or bpy.app.version < (5, 0, 0):
+        return
+    from . import xp2b as XC
+
+    if not XC.available() or XC.bone_support():
+        return
+    _warned_wrong_build = True
+    report({'WARNING'}, _XP2B_WRONG_BUILD % bpy.app.version[0])
+
+
 def _convert(context, headers, report):
     """The exportable collections built for these headers ([] if XP2B cannot).
 
@@ -139,6 +162,7 @@ def _convert(context, headers, report):
     if not XC.available():
         report({'ERROR'}, _XP2B_MISSING)
         return []
+    _check_xp2b_build(report)
     try:
         return XC.convert(context, headers, report)
     except Exception as exc:                              # noqa: BLE001
