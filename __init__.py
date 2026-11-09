@@ -937,7 +937,48 @@ def _menu_import(self, context):
                          text="X-Plane Aircraft (.acf, all objects)")
 
 
+_STANDALONE_XP2B = "io_xplane2blender"
+_own_xp2b = False
+
+
+def _standalone_xp2b_enabled():
+    """True when a separately installed XPlane2Blender is enabled."""
+    try:
+        return _STANDALONE_XP2B in bpy.context.preferences.addons.keys()
+    except AttributeError:
+        return False
+
+
+def _register_xp2b():
+    """Register the bundled XPlane2Blender; False when one was already running.
+
+    The export half only exists as a 4.x-era add-on, and on Blender 5.x only the
+    armature build writes animations at all, so this package carries that build
+    as `xplane2blender/` and registers it together with ours.  A user who already
+    has a standalone XPlane2Blender enabled keeps theirs: registering both would
+    put two of every operator and panel in the UI, and two exporters writing the
+    same file.
+    """
+    global _own_xp2b
+    if _own_xp2b:
+        return True
+    if _standalone_xp2b_enabled():
+        print("xplane_obj: a standalone XPlane2Blender is enabled - using it "
+              "instead of the bundled one", flush=True)
+        return False
+    try:
+        from . import xplane2blender
+        xplane2blender.register()
+    except Exception as exc:                              # noqa: BLE001
+        print("xplane_obj: the bundled XPlane2Blender did not register (%s); "
+              "the import still works, the export does not" % exc, flush=True)
+        return False
+    _own_xp2b = True
+    return True
+
+
 def register():
+    _register_xp2b()
     for cls in CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.TOPBAR_MT_file_import.append(_menu_import)
@@ -947,6 +988,9 @@ def unregister():
     bpy.types.TOPBAR_MT_file_import.remove(_menu_import)
     for cls in reversed(CLASSES):
         bpy.utils.unregister_class(cls)
+    if _own_xp2b:
+        from . import xplane2blender
+        xplane2blender.unregister()
 
 
 if __name__ == "__main__":

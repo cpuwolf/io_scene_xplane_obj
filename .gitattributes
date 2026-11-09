@@ -1,0 +1,6 @@
+# The bundled XPlane2Blender is upstream code carried verbatim (see CREDITS.md).
+# Tell GitHub it is vendored so the repository's language stats stay about this
+# add-on, and turn off newline conversion so the files stay byte-identical to
+# the build they came from.
+xplane2blender/** linguist-vendored
+xplane2blender/** -text

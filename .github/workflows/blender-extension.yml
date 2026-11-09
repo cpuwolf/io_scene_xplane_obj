@@ -67,6 +67,19 @@ jobs:
           blender --factory-startup --command extension validate dist/*.zip
           unzip -l dist/*.zip
 
+      - name: The package actually registers and exports
+        run: |
+          set -euo pipefail
+          # `extension validate` only reads the structure. A zip that is missing
+          # a module the exporter imports at runtime passes it and then fails to
+          # register in a user's session, so load the built zip, import a
+          # fixture and export it - 25 ANIM_ lines come out of nested.obj, and
+          # zero means the export lost every animation without saying so.
+          out=$(blender -b --factory-startup --python verify/bundle_smoke.py -- \
+                  dist/*.zip verify/fixtures/nested.obj 2>&1)
+          echo "$out"
+          echo "$out" | grep -q "^RESULT: PASS"
+
       - uses: actions/upload-artifact@v7
         with:
           name: blender-extension

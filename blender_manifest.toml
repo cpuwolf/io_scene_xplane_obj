@@ -6,9 +6,9 @@ schema_version = "1.0.0"
 # extensions/<repo>/io_scene_xplane_obj/.
 
 id = "io_scene_xplane_obj"
-version = "0.10.20"
+version = "0.11.0"
 name = "X-Plane OBJ8 Importer"
-tagline = "Import X-Plane .obj or .acf into a scene XPlane2Blender exports"
+tagline = "Import and export X-Plane .obj and .acf in one install"
 maintainer = "Wei Shuai"
 type = "add-on"
 
@@ -19,13 +19,15 @@ license = ["SPDX:GPL-3.0-or-later"]
 
 blender_version_min = "5.0.0"
 
-copyright = ["2026 Wei Shuai"]
+# The copyright field only takes years; who holds them is in CREDITS.md, which
+# names the bundled XPlane2Blender authors the GPL asks us to credit.
+copyright = ["2026 Wei Shuai", "2013-2026 XPlane2Blender contributors"]
 
-# The add-on reads the .obj / .acf files the user opens (and writes none of them),
-# which is what the `files` permission covers - the extension platform expects it
-# for any add-on that touches the file system outside its own directory.
+# The add-on reads the .obj / .acf files the user picks and writes the .obj files
+# the exporter saves - the extension platform expects the `files` permission for
+# any add-on that touches the file system outside its own directory.
 [permissions]
-files = "Import X-Plane .obj and .acf files that you pick from disk"
+files = "Read X-Plane .obj/.acf, write the .obj files you export"
 
 # Build settings.  Only the shipped add-on belongs in the package: the verify /
 # dev scripts, the dev symlink helper and the CI config stay in the repository.
@@ -42,6 +44,9 @@ paths_exclude_pattern = [
   "/dist/",
   "/verify/",
   "/scripts/",
+  # xplane2blender/tests/ IS packaged: xplane_file.py and
+                # xplane_wiper_gradient.py import test_creation_helpers at
+                # runtime, so excluding it makes the export fail to register.
   "/docs/",     # the README links to these on GitHub; the add-on does not read
                 # them, and the extension platform renders only the README
   "/dev-link.sh",
