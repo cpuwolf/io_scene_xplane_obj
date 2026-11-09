@@ -118,7 +118,10 @@ def _make_transparent(mat):
     if bsdf is None:
         return
     for link in list(nt.links):
-        if link.to_node is bsdf and link.to_socket.name == 'Alpha':
+        # compare with == and not `is`: Blender hands out a fresh Python wrapper
+        # for a node on every access, so an identity check silently misses the
+        # link and the texture's alpha keeps winning over the socket value
+        if link.to_node == bsdf and link.to_socket.name == 'Alpha':
             nt.links.remove(link)
     bsdf.inputs['Alpha'].default_value = 0.0
     try:

@@ -52,7 +52,7 @@ def material_rows():
         rows.append({
             "name": mat.name,
             "alpha": round(bsdf.inputs['Alpha'].default_value, 4),
-            "alpha_linked": any(l.to_node is bsdf and l.to_socket.name == 'Alpha'
+            "alpha_linked": any(l.to_node == bsdf and l.to_socket.name == 'Alpha'
                                 for l in mat.node_tree.links),
             "render_method": getattr(mat, "surface_render_method", "?"),
             "diffuse_alpha": round(mat.diffuse_color[3], 4),
