@@ -178,6 +178,24 @@ def _enable_viewport_backface_culling():
                     pass
 
 
+def _adopt(parent, coll):
+    """Link `coll` under `parent` and nowhere else.
+
+    `_own_collection` converts in the collection the import already used, and
+    only falls back to a fresh collection in the scene master collection when
+    it cannot (a collection shared by several headers, or the master itself).
+    Re-home whatever came back instead of trusting where it landed: a
+    collection can be linked into several parents, and one parent is what makes
+    the outliner show one aircraft.
+    """
+    for owner in list(bpy.data.collections):
+        if owner.name != parent.name and \
+                owner.children.get(coll.name) is not None:
+            owner.children.unlink(coll)
+    if parent.children.get(coll.name) is None:
+        parent.children.link(coll)
+
+
 def _convert(context, headers, report):
     """The exportable collections built for these headers ([] if XP2B cannot).
 
@@ -355,6 +373,9 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
                                                        "no .acf selected"))
             return {'CANCELLED'}
 
+        # (path, the .acf it belongs to): the parent collection this import
+        # builds is named after that .acf, so each object has to keep which
+        # aircraft attached it
         paths = []
         seen = set()
         missing = []
@@ -364,15 +385,18 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
             except (OSError, ValueError) as exc:
                 self.report({'ERROR'}, "%s: %s" % (os.path.basename(acf), exc))
                 continue
+            group = os.path.basename(acf)
             # two .acf of the same family (Cessna_172SP.acf and its _seaplane
             # variant) share objects; importing a file twice would build two
-            # identical collections, one of which nothing refers to
+            # identical collections, one of which nothing refers to.  The
+            # first .acf that lists it owns it, so both parents stay populated
+            # and no object is imported twice.
             for found_path in found:
                 key = os.path.normcase(found_path)
                 if key in seen:
                     continue
                 seen.add(key)
-                paths.append(found_path)
+                paths.append((found_path, group))
             missing.extend(gone)
 
         if missing:
@@ -397,6 +421,7 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
         self._made = 0
         self._tris = 0
         self._colls = []
+        self._parents = {}           # .acf name -> its parent collection
         self._timer = None
         self._can_convert = XC.available()
 
@@ -451,32 +476,63 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
         if workspace is not None:
             workspace.status_text_set(text)
 
+    def _aircraft_collection(self, context, name):
+        """The parent collection for one `.acf`, created on first use.
+
+        It is a plain collection, not an exportable one: it groups the
+        per-object collections (one per `.obj`, each its own XP2B layer) so a
+        42-object aircraft is one fold-out in the outliner instead of 42
+        siblings.  XPlane2Blender walks collections recursively, so a root
+        inside it exports exactly as before.
+        """
+        coll = self._parents.get(name)
+        if coll is None:
+            coll = bpy.data.collections.new(name)
+            context.scene.collection.children.link(coll)
+            self._parents[name] = coll
+        return coll
+
     def _step(self, context):
         """Import one .obj, convert it, and say which object that was."""
-        path = self._queue.pop(0)
+        path, aircraft = self._queue.pop(0)
         self._done += 1
         name = os.path.basename(path)
         self._status(context, "X-Plane .acf  %d/%d  %s   (ESC to stop)"
                      % (self._done, self._total, name))
         print("xplane_obj: importing %s (%d/%d)"
               % (path, self._done, self._total), flush=True)
+        # a collection of its own per file, under the aircraft's collection:
+        # the conversion renames it to `<file>.obj` and makes it the exportable
+        # layer in place, so it must already sit where the user should see it
+        parent = self._aircraft_collection(context, aircraft)
+        sub = bpy.data.collections.new(name)
+        parent.children.link(sub)
         try:
-            header = XM.import_file(context, path, report=self.report,
-                                    preview_rig=False)
+            header = XM.import_file(context, path, into_collection=sub,
+                                    report=self.report, preview_rig=False)
         except (ValueError, OSError) as exc:
             self.report({'ERROR'}, "%s: %s" % (name, exc))
+            header = None
+        if header is None:
+            # nothing landed in it (a parse error, or a file the importer
+            # refused) - an empty collection would read as a broken import
+            if not sub.objects and not sub.children:
+                parent.children.unlink(sub)
+                bpy.data.collections.remove(sub)
         else:
-            if header is not None:
-                self._made += 1
-                for part in XM.parts(header):
-                    if part.type == 'MESH' and \
-                            part.get(XM.PROP_ROLE) == XM.ROLE_TRIS:
-                        self._tris += len(part.data.loop_triangles) or (
-                            len(part.data.polygons))
-                if self._can_convert:
-                    # per object, not one call at the end: the conversion is
-                    # part of this step, so the progress count is honest
-                    self._colls.extend(_convert(context, [header], self.report))
+            self._made += 1
+            for part in XM.parts(header):
+                if part.type == 'MESH' and \
+                        part.get(XM.PROP_ROLE) == XM.ROLE_TRIS:
+                    self._tris += len(part.data.loop_triangles) or (
+                        len(part.data.polygons))
+            if self._can_convert:
+                # per object, not one call at the end: the conversion is
+                # part of this step, so the progress count is honest
+                colls = _convert(context, [header], self.report)
+                for coll in colls:
+                    _adopt(parent, coll)
+                self._colls.extend(colls)
         context.window_manager.progress_update(self._done)
 
     def _finish(self, context, stopped=False):
@@ -488,6 +544,13 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
         self._status(context, None)
         left = len(self._queue)
         self._queue = []
+
+        # a parent whose every object failed to import is an empty shell with
+        # the aircraft's name on it - drop it instead of leaving that behind
+        for aircraft in list(self._parents.values()):
+            if not aircraft.children and not aircraft.objects:
+                context.scene.collection.children.unlink(aircraft)
+                bpy.data.collections.remove(aircraft)
 
         if self._made and not self._can_convert:
             self.report({'ERROR'}, _XP2B_MISSING)

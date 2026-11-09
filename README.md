@@ -10,7 +10,15 @@ step to remember and nothing to set up per file: the import builds the
 XPlane2Blender collection itself.
 
 Drop an aircraft's **`.acf`** instead and every object it attaches is imported in
-one go — the whole aircraft, not one part of it.
+one go — the whole aircraft, not one part of it — under one parent collection
+named after the `.acf`:
+
+```
+Cessna_172SP.acf                  collection — one per .acf, an organiser only
+├ Cessna_172SP_cockpit.obj        collection — the exportable XPlane2Blender layer
+├ fuselage.obj                    collection
+└ wings.obj                       collection  (…one per .obj the aircraft attaches)
+```
 
 ## The pipeline
 
@@ -81,7 +89,7 @@ it, are in
 | Cockpit panels, manipulators, light levels? | `ATTR_cockpit*`, `ATTR_manip_*`, `ATTR_light_level`, `ATTR_draw_disable`, `ATTR_solid_camera` all land on the XPlane2Blender material/object/layer fields they belong to. |
 | Texture paths in the exported file? | The texture set is also written onto the XP2B **layer**, which is where its exporter reads them from. |
 | Files the sim loads but exporters mangle? | A missing `POINT_COUNTS` and trailing `#` comments are both tolerated. |
-| The whole aircraft at once? | Drag its **`.acf`** onto the viewport: every `.obj` the aircraft attaches is imported, one collection each. The `.acf` itself is only read. |
+| The whole aircraft at once? | Drag its **`.acf`** onto the viewport: every `.obj` the aircraft attaches is imported, one collection each, all of them children of one collection named after the `.acf`. The `.acf` itself is only read. |
 
 ## Docs
 

@@ -49,6 +49,13 @@ _obja/0/_v10_att_file_stl ../Cessna_172SP_cockpit.obj
   several slots, and two `.acf` files of one family (a base and a `_seaplane`
   variant) share objects; a second copy would be an identical collection nothing
   refers to.
+* **Everything lands under one collection named after the `.acf`.** The aircraft
+  folder is the unit you manage, so the import builds `Cessna_172SP.acf` and puts
+  every per-object exportable collection inside it — one fold-out in the outliner
+  instead of 42 siblings. That parent is a plain collection, not an exportable
+  one; XPlane2Blender walks collections recursively, so all 42 layers still export
+  as before. Drop several `.acf` files at once and each gets its own parent (an
+  object two of them share stays with the first, so nothing is imported twice).
 * A listed object that is **not on disk** is reported as a warning and skipped —
   it does not stop the import.
 * The `.acf` is **only read**. Laminar asks that add-ons not write the format,

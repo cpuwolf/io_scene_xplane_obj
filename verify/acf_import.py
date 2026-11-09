@@ -79,29 +79,78 @@ except RuntimeError as exc:
     error = str(exc)
 elapsed = time.time() - t0
 
-exportable = [c for c in bpy.data.collections
-              if getattr(c.xplane, "is_exportable_collection", False)]
+def is_exportable(coll):
+    """`xplane` does not exist on a Collection while XP2B is disabled."""
+    return getattr(getattr(coll, "xplane", None),
+                   "is_exportable_collection", False)
+
+
+exportable = [c for c in bpy.data.collections if is_exportable(c)]
 meshes = [o for o in bpy.data.objects if o.type == 'MESH']
 arms = [o for o in bpy.data.objects if o.type == 'ARMATURE']
 
+# one parent collection per .acf, named after the file, holding the per-object
+# exportable collections: that is the tree the user manages an aircraft in
+parents = [c for c in bpy.data.collections if c.name.lower().endswith(".acf")]
+
+
+def child_names(coll):
+    return [c.name for c in coll.children]
+
+
+def parent_of(coll, parents):
+    for parent in parents:
+        if coll.name in child_names(parent):
+            return parent.name
+    return None
+
+
 print("\nresult: %s in %.1fs" % (result, elapsed), flush=True)
-print("collections: %d (%d exportable)" % (len(bpy.data.collections),
-                                           len(exportable)), flush=True)
+print("collections: %d (%d exportable, %d .acf parent)"
+      % (len(bpy.data.collections), len(exportable), len(parents)), flush=True)
+for coll in parents:
+    print("  parent %-32s exportable=%s children=%d"
+          % (coll.name, is_exportable(coll), len(coll.children)), flush=True)
 for coll in exportable:
     owned = [o for o in coll.objects if o.type == 'MESH']
     layer = getattr(coll.xplane, "layer", None)
-    print("  %-40s meshes=%-4d layer=%s" % (coll.name, len(owned),
-                                            getattr(layer, "name", "?")),
-          flush=True)
+    print("  %-40s meshes=%-4d layer=%-24s parent=%s"
+          % (coll.name, len(owned), getattr(layer, "name", "?"),
+             parent_of(coll, parents)), flush=True)
 print("meshes=%d armatures=%d" % (len(meshes), len(arms)), flush=True)
 
 if error:
     print("error: %s" % error, flush=True)
 
+# every imported .acf has its collection, and every exportable layer sits under
+# exactly that collection (not at the scene root)
+named = [c for c in parents
+         if c.name in [os.path.basename(a) for a in ACFS]]
+nested = [c for c in exportable if parent_of(c, named)]
+print("acf parents matching the input: %d, exportable under one: %d/%d"
+      % (len(named), len(nested), len(exportable)), flush=True)
+
+# nesting must not hide a root from the exporter: XP2B walks collections
+# recursively, so it has to find every layer inside the .acf collection
+found_files = None
+if WANT_XP2B and exportable:
+    try:
+        from io_xplane2blender.xplane_types import xplane_file as XF
+        xplane_files = XF.createFilesFromBlenderRootObjects(
+            bpy.context.scene, bpy.context.view_layer)
+        found_files = [getattr(f, "filename", None) or f.layer_props.name
+                       for f in xplane_files]
+        print("xp2b finds %d root file(s): %s"
+              % (len(found_files), found_files), flush=True)
+    except Exception as exc:                              # noqa: BLE001
+        print("xp2b root scan failed: %s" % exc, flush=True)
+
 if WANT_XP2B:
-    ok = (result == {'FINISHED'} and meshes and exportable)
+    ok = (result == {'FINISHED'} and meshes and exportable
+          and len(named) >= 1 and len(nested) == len(exportable)
+          and (not exportable or len(found_files or []) == len(exportable)))
 else:
     # without XP2B the import still has to land the geometry and say why there
     # is no exportable collection, instead of failing silently
-    ok = bool(meshes) and "XPlane2Blender" in error
+    ok = bool(meshes) and "XPlane2Blender" in error and len(named) >= 1
 print("\nRESULT: %s" % ("PASS" if ok else "FAIL"), flush=True)
