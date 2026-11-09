@@ -994,7 +994,10 @@ def bake_bone_tree(context, arm, specs, overrides=None):
             pass
         if cmd["kind"] in (XA.CMD_ROTATE, XA.CMD_ROTATE_KEYS):
             axis = cmd.get("axis") or (0.0, 1.0, 0.0)
-            bone["xp8_axis"] = "%s %s %s" % tuple(OC.fmt_num(v) for v in axis)
+            # plain formatting on purpose: `objcodec.fmt_num` went with the
+            # exporter in 0.9.0, and this property is only a readable copy of
+            # the file's axis, not something written back to a file
+            bone["xp8_axis"] = " ".join("%g" % round(v, 6) for v in axis)
             bone["xp8_angle_deg"] = degrees[0]
             # A pose bone owns the keyed property (its f-curve lives on the
             # armature object), the data bone keeps the same value read-only so
