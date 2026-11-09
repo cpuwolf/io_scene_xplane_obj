@@ -552,6 +552,13 @@ def wire_combo_material(nt, bsdf, obj8, obj_dir, raw_nrm, x, y=-360):
 def build_material(obj8, obj_dir, name):
     """A Principled material wired from the file's TEXTURE / _LIT / _NORMAL."""
     mat = bpy.data.materials.new(name)
+    # X-Plane draws surfaces single-sided: nothing is visible from behind unless
+    # the object says ATTR_no_cull, which _apply_surface_state turns off again
+    # on a material copy.  Set it before the early return below.
+    try:
+        mat.use_backface_culling = True
+    except (AttributeError, TypeError):
+        pass
     mat.use_nodes = True
     nt = mat.node_tree
     bsdf = None

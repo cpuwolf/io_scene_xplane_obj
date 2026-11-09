@@ -148,6 +148,36 @@ def _check_xp2b_build(report):
     report({'WARNING'}, _XP2B_WRONG_BUILD % bpy.app.version[0])
 
 
+def _enable_viewport_backface_culling():
+    """Turn Solid-mode backface culling on in every 3D viewport.
+
+    X-Plane surfaces are single-sided and the importer now marks the materials
+    that way, but Blender keeps the *Solid mode* switch per viewport: it is not
+    a material property and a .blend cannot carry it alongside the objects.
+    Flipping it here makes the session that ran the import look right in Solid
+    shading.  Material Preview and Rendered already follow the material flag,
+    so this is only about the viewport Blender starts in.
+    """
+    try:
+        windows = bpy.context.window_manager.windows
+    except AttributeError:                                # headless
+        return
+    for window in windows:
+        screen = getattr(window, "screen", None)
+        if screen is None:
+            continue
+        for area in screen.areas:
+            if area.type != 'VIEW_3D':
+                continue
+            for space in area.spaces:
+                if space.type != 'VIEW_3D':
+                    continue
+                try:
+                    space.shading.show_backface_culling = True
+                except (AttributeError, TypeError):
+                    pass
+
+
 def _convert(context, headers, report):
     """The exportable collections built for these headers ([] if XP2B cannot).
 
@@ -265,6 +295,7 @@ class IMPORT_OT_xplane_obj(bpy.types.Operator, ImportHelper):
         self.report({'INFO'}, "imported %d file(s), %d triangles"
                     % (made, tri_count))
         _build_xp2b(context, headers, self.report)
+        _enable_viewport_backface_culling()
         return {'FINISHED'}
 
 
@@ -473,6 +504,7 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
                     % (self._made, self._total, self._tris,
                        ", %d exportable collection(s)" % len(self._colls)
                        if self._colls else ""))
+        _enable_viewport_backface_culling()
         return {'FINISHED'}
 
 

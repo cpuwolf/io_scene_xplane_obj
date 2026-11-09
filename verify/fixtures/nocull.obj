@@ -1,0 +1,22 @@
+I
+800
+OBJ
+
+# Fixture: X-Plane surfaces are single-sided by default; ATTR_no_cull is the
+# exception.  Two quads, one texture: the first keeps backface culling on, the
+# second must get a material copy with it switched off.
+TEXTURE	mini.png
+POINT_COUNTS	8 0 0 4
+
+VT	0	0	0	0	1	0	0	0
+VT	1	0	0	0	1	0	1	0
+VT	1	0	1	0	1	0	1	1
+VT	0	0	1	0	1	0	0	1
+VT	2	0	0	0	1	0	0	0
+VT	3	0	0	0	1	0	1	0
+VT	3	0	1	0	1	0	1	1
+VT	2	0	1	0	1	0	0	1
+IDX10	0 1 2 0 2 3 4 5 6 4 6 7
+TRIS	0	6
+ATTR_no_cull
+TRIS	6	6

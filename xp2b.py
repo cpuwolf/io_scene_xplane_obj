@@ -134,6 +134,26 @@ def _make_transparent(mat):
         pass
 
 
+def _add_custom_attribute(xplane_group, name, value=""):
+    """Add (or update) a XPlane2Blender custom attribute by name.
+
+    Custom attributes are written to the OBJ verbatim, so they are the way to
+    carry a state line XPlane2Blender has no field of its own for - ATTR_no_cull
+    is one of them.
+    """
+    try:
+        coll = xplane_group.customAttributes
+    except AttributeError:
+        return
+    for attr in coll:
+        if attr.name == name:
+            attr.value = value
+            return
+    attr = coll.add()
+    attr.name = name
+    attr.value = value
+
+
 def _new_collection(name):
     coll = bpy.data.collections.new(name)
     return coll
@@ -974,6 +994,33 @@ class _Converter(object):
         for slot in ob.material_slots:
             _make_transparent(slot.material)
 
+    def _set_backface_culling(self, ob, cull, tag):
+        """ATTR_cull / ATTR_no_cull -> Blender's flag, and back out again.
+
+        Same cloning rule as ``_material_set``: a material carries one value, so
+        the batch that disagrees gets its own copy, cached per (material, value)
+        so a file with three looks does not produce 160 materials.
+
+        XPlane2Blender has no cull field, but it does have custom attributes and
+        writes those verbatim - so the copy carries ATTR_no_cull there and the
+        line survives the export.  ATTR_cull needs nothing written: single-sided
+        is already what X-Plane does by default.
+        """
+        for slot in ob.material_slots:
+            mat = slot.material
+            if mat is None or mat.use_backface_culling == cull:
+                continue
+            key = (mat.as_pointer(), "cull", cull)
+            clone = self.material_cache.get(key)
+            if clone is None:
+                clone = mat.copy()
+                clone.name = mat.name + "_" + tag
+                clone.use_backface_culling = cull
+                if not cull:
+                    _add_custom_attribute(clone.xplane, "ATTR_no_cull")
+                self.material_cache[key] = clone
+            slot.material = clone
+
     def _apply_light_level(self, ob, state):
         """ATTR_light_level -> the *object's* X-Plane light level.
 
@@ -1060,20 +1107,23 @@ class _Converter(object):
                             slot.material.specular_intensity = value
 
     def _apply_surface_state(self, ob, state):
-        """blend / shadow / poly_os -> the matching material properties.
+        """blend / shadow / poly_os / cull -> the matching material properties.
 
-        Unambiguous one-to-one mappings only.  ATTR_hard, ATTR_cull,
-        ATTR_depth, ATTR_draped and ATTR_hud_glass are deliberately left as
-        warnings: each either needs a table we would be guessing at (ATTR_hard
-        takes a surface number) or has no XPlane2Blender field at all, and a
-        wrong guess changes how the object renders.  ATTR_draped is also
-        rejected outright by XP2B outside scenery objects ("Must not be
-        draped"), which is where that experiment ended.
+        ATTR_cull and ATTR_no_cull go to Blender's own ``use_backface_culling``
+        rather than an XPlane2Blender field (it has none): every material starts
+        out single-sided, and ATTR_no_cull is the exception that gets a copy
+        with culling switched off.  ATTR_hard, ATTR_depth, ATTR_draped and
+        ATTR_hud_glass are still left as warnings: each either needs a table we
+        would be guessing at (ATTR_hard takes a surface number) or has no
+        XPlane2Blender field at all, and a wrong guess changes how the object
+        renders.  ATTR_draped is also rejected outright by XP2B outside scenery
+        objects ("Must not be draped"), which is where that experiment ended.
         """
         blend = {"ATTR_blend": "on", "ATTR_no_blend": "off",
                  "ATTR_shadow_blend": "shadow"}
         flags = {"ATTR_shadow": ("shadow_local", True),
                  "ATTR_no_shadow": ("shadow_local", False)}
+        cull = {"ATTR_cull": True, "ATTR_no_cull": False}
         for cat, raws in state or []:
             for raw in raws:
                 words = raw.split()
@@ -1085,6 +1135,8 @@ class _Converter(object):
                 elif kw in flags:
                     field, value = flags[kw]
                     self._material_set(ob, [(field, value)], kw[:12])
+                elif kw in cull:
+                    self._set_backface_culling(ob, cull[kw], kw[:12])
                 elif kw == "ATTR_poly_os" and len(words) > 1:
                     try:
                         value = int(float(words[1]))
@@ -1419,7 +1471,7 @@ class _Converter(object):
         # file comes back looking fine with a state line silently missing
         keep = {"manip", "draw", "light_level", "camera", "shiny", "shade",
                 "blend", "shadow", "poly_os", "cockpit", "detent_range",
-                "detent_axis", "manip_wheel", "manip_keyframe"}
+                "detent_axis", "manip_wheel", "manip_keyframe", "cull"}
         for cat, raws in state or []:
             if cat in keep:
                 continue
