@@ -233,13 +233,14 @@ class _Anchor(object):
 # ---------------------------------------------------------------------------
 
 def _manip_line(state):
+    """The ATTR_manip_* line (words, raw text), or (None, None)."""
     for cat, raws in state or []:
         if cat == "manip":
             for raw in raws:
                 words = raw.split()
                 if words and words[0].startswith("ATTR_manip_"):
-                    return words
-    return None
+                    return words, raw
+    return None, None
 
 
 def _tail(words, start):
@@ -447,7 +448,7 @@ def apply_manipulator(ob, state, warnings, rig=None):
     ``_apply_drag_rotate``).  None means "nothing known" - such a manipulator
     stays unconverted rather than aborting the export.
     """
-    words = _manip_line(state)
+    words, raw_line = _manip_line(state)
     if words is None:
         return False
     kw, args = words[0], words[1:]
@@ -571,6 +572,19 @@ def apply_manipulator(ob, state, warnings, rig=None):
         return False
 
     manip.enabled = False
+    if kw.startswith("ATTR_manip_"):
+        # XPlane2Blender has no field for this manipulator type (ATTR_manip_device
+        # arrived in X-Plane 12.1.0, after the release we target), but an
+        # object's custom attributes are written back verbatim and the writer
+        # emits them with the object - so the line survives that way instead of
+        # being dropped.  manip.enabled stays False, so XP2B writes no
+        # ATTR_manip_* of its own and the two cannot collide.
+        _add_custom_attribute(ob.xplane, kw,
+                              raw_line[len(kw):].strip() if raw_line
+                              else " ".join(args))
+        warnings.append("%s kept as a custom attribute; XPlane2Blender has no "
+                        "field for it" % kw)
+        return False
     warnings.append("%s is not converted (no XPlane2Blender equivalent)" % kw)
     return False
 
