@@ -1380,13 +1380,21 @@ def _build_tris_object(context, obj8, leaf, base, leaf_index, mat, coll, warning
     me.validate(verbose=False)
     me.update()
 
-    # per-loop UVs and normals, straight out of the VT table
+    # Per-loop UVs and normals, addressed through each loop's OWN vertex.
+    # Looking them up as tris[k] is wrong: validate() drops near-degenerate
+    # slivers (this file has triangles down to 1e-9 m^2), and from that face
+    # onwards every loop index has shifted by three - the UV stream would land
+    # on the wrong vertices for the rest of the mesh.  remap is injective
+    # (one Blender vertex per VT index), so inverting it gives the VT row that
+    # each surviving loop actually belongs to.
+    inv = {bv: vi for vi, bv in remap.items()}
     uv = me.uv_layers.new(name="UVMap")
-    flat_uv = [0.0] * (len(tris) * 2)
+    flat_uv = [0.0] * (len(me.loops) * 2)
     normals = []
     have_normals = True
-    for k, vi in enumerate(tris):
-        row = obj8.vt[vi] if 0 <= vi < len(obj8.vt) else None
+    for k, loop in enumerate(me.loops):
+        vi = inv.get(loop.vertex_index)
+        row = obj8.vt[vi] if vi is not None and 0 <= vi < len(obj8.vt) else None
         if row is not None:
             flat_uv[k * 2] = row.s
             flat_uv[k * 2 + 1] = row.t
