@@ -9,12 +9,15 @@ carried inside this package as `xplane2blender/` so that one install imports and
 exports X-Plane objects — the extension platform does not allow an add-on whose
 features depend on another add-on.
 
-* Copyright © XPlane2Blender contributors: Ted Greene, Ben Supnik, Amy Parent,
-  Maya F. Eroğlu.
-* Licence: GPL-2.0-or-later (the per-file header in `xplane2blender/` says so);
-  redistributed here under GPL-3.0-or-later, which GPL-2.0-or-later permits.
-  The full text is in `xplane2blender/LICENSE` upstream; the licence block at the
-  top of `xplane2blender/__init__.py` is the authoritative statement.
+* Copyright © XPlane2Blender contributors: **Ted Greene, Ben Supnik, Amy Parent,
+  Maya F. Eroğlu** — the same four names `blender_manifest.toml` credits, in the
+  order upstream `bl_info` lists them. The upstream repository was created
+  2010-08-10, which is the span the manifest uses per holder.
+* Licence: the repository's `LICENSE` is the GPL v3 text (what GitHub reports as
+  `GPL-3.0`), while the per-file header in `xplane2blender/` offers
+  GPL-2.0-or-later. Both allow redistribution here under GPL-3.0-or-later; this
+  package ships as `SPDX:GPL-3.0-or-later` and keeps every upstream file's own
+  header untouched.
 * Source: the `blender-5x-armature-v1` build of `cpuwolf/XPlane2Blender`, commit
   `bbbf32e`, which is XPlane2Blender 4.5.0 plus the Blender 5.x armature fix.
 

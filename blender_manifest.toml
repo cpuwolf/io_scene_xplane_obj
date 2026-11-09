@@ -6,7 +6,7 @@ schema_version = "1.0.0"
 # extensions/<repo>/io_scene_xplane_obj/.
 
 id = "io_scene_xplane_obj"
-version = "0.11.0"
+version = "0.11.1"
 name = "X-Plane OBJ8 Import & Export"
 tagline = "Import and export X-Plane .obj and .acf in one install"
 maintainer = "Wei Shuai"
@@ -19,9 +19,16 @@ license = ["SPDX:GPL-3.0-or-later"]
 
 blender_version_min = "5.0.0"
 
-# The copyright field only takes years; who holds them is in CREDITS.md, which
-# names the bundled XPlane2Blender authors the GPL asks us to credit.
-copyright = ["2026 Wei Shuai", "2013-2026 XPlane2Blender contributors"]
+# The validator wants "<year> <name>" per entry, so each holder of the bundled
+# exporter rides the upstream project's copyright span (created 2010-08-10);
+# CREDITS.md carries who did what. Names exactly as upstream bl_info spells them.
+copyright = [
+  "2026 Wei Shuai",
+  "2010-2026 Ted Greene",
+  "2010-2026 Ben Supnik",
+  "2010-2026 Amy Parent",
+  "2010-2026 Maya F. Eroğlu",
+]
 
 # The add-on reads the .obj / .acf files the user picks and writes the .obj files
 # the exporter saves - the extension platform expects the `files` permission for
