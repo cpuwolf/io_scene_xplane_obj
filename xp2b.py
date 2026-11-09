@@ -1210,6 +1210,10 @@ class _Converter(object):
             mat = slot.material
             if mat is None or mat.use_backface_culling == cull:
                 continue
+            if mat.get(XM.PROP_GLASS):
+                # a BLEND_GLASS canopy is two-sided in X-Plane; forcing the
+                # single-sided default would make it vanish from the cockpit
+                continue
             key = (mat.as_pointer(), "cull", cull)
             clone = self.material_cache.get(key)
             if clone is None:

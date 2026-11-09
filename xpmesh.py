@@ -57,6 +57,7 @@ PROP_TEXTURE = "xp8_texture"
 PROP_TEXTURE_LIT = "xp8_texture_lit"
 PROP_TEXTURE_NORMAL = "xp8_texture_normal"
 PROP_TEXTURE_MAP = "xp8_texture_map"
+PROP_GLASS = "xp8_glass"                 # BLEND_GLASS: alpha thins diffuse only
 PROP_VT_ATTR = "xp8_vt"
 PROP_PLACEMENT = "xp8_placement"
 PROP_LEAF_STATES = "xp8_leaf_states"
@@ -385,6 +386,14 @@ def _hexdigest(parts):
 # textures and materials
 # ---------------------------------------------------------------------------
 
+#: X-Plane resolves a texture by its stem, not its extension: an OBJ that says
+#: ``TEXTURE foo.png`` is served by ``foo.dds`` on disk, and that is how most
+#: aircraft ship their liveries.  Blender reads DDS directly (a 32-bit one comes
+#: back with its alpha intact), so the file that is actually on disk wins over
+#: the extension the author happened to write.
+TEXTURE_EXTENSIONS = (".dds", ".png", ".tga", ".bmp", ".jpg", ".jpeg")
+
+
 def resolve_texture(obj_dir, name):
     """Find a texture named in an OBJ file.  Returns an absolute path or None."""
     if not name:
@@ -401,12 +410,20 @@ def resolve_texture(obj_dir, name):
     for c in candidates:
         if os.path.isfile(c):
             return c
+    # same stem, another extension (X-Plane serves foo.dds for "foo.png")
+    for c in candidates:
+        stem = os.path.splitext(c)[0]
+        for ext in TEXTURE_EXTENSIONS:
+            if os.path.isfile(stem + ext):
+                return stem + ext
     # case-insensitive fallback (files authored on Windows)
     for c in candidates:
         d, base = os.path.split(c)
         if os.path.isdir(d):
+            stem = os.path.splitext(base)[0].lower()
             for entry in os.listdir(d):
-                if entry.lower() == base.lower():
+                entry_stem, entry_ext = os.path.splitext(entry)
+                if entry_stem.lower() == stem and entry_ext.lower() in TEXTURE_EXTENSIONS:
                     return os.path.join(d, entry)
     return None
 
@@ -615,6 +632,19 @@ def build_material(obj8, obj_dir, name):
         except (AttributeError, TypeError):
             pass
         bsdf.inputs['Roughness'].default_value = 0.05
+        # X-Plane thins only the diffuse pass on glass and keeps specular, so a
+        # canopy still catches a highlight.  Blender's alpha blend scales the
+        # whole shader, which would take the reflection with it - push specular
+        # to its ceiling and give the surface a glass IOR so the viewport shows
+        # something closer to a windscreen than to a tinted hole.
+        for socket, value in (('Specular IOR Level', 1.0), ('IOR', 1.45)):
+            try:
+                bsdf.inputs[socket].default_value = value
+            except KeyError:
+                pass
+        # a canopy is looked at from the cockpit as well as from outside
+        mat.use_backface_culling = False
+        mat[PROP_GLASS] = True
     if "_LIT" in raw_tex.upper() or raw_lit:
         pass
 
