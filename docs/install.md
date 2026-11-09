@@ -1,6 +1,8 @@
 # Install
 
-Two pieces, in this order. The second one imports; the first one exports.
+Two pieces: the first one **exports**, the second one **imports**. Install both,
+then restart Blender once (see [Restart Blender](#restart-blender)) — the source
+order below is the order of the work, not a technical requirement.
 
 ## 1. XPlane2Blender
 
@@ -54,6 +56,11 @@ Blender 5.0 or newer.
 Both add-ons load their modules at startup. Installing (or updating) an add-on
 while Blender is open leaves the **old code in memory** — Python edits and
 reinstalls only take effect after a full quit and relaunch.
+
+That is also why the install order does not matter to Blender: install both in
+one session, restart once, and both are live. What the order does decide is what
+you see first — installing this add-on and stopping there gives an import with no
+export target, and the add-on says so instead of failing quietly.
 
 ## The exact setup this is tested on
 

@@ -64,19 +64,31 @@ C90B_cockpit.obj                 collection — the exportable XPlane2Blender la
 
 ## Install
 
-1. **Preferences > Get Extensions > search `X-Plane OBJ8` > Install.**
-   (No platform account yet? Drag the release zip onto Blender instead.)
-2. **Restart Blender.**
+Two add-ons, in this order: the **first one exports**, the **second one imports**.
+Install both, then restart Blender once — add-ons load at startup, so the restart
+is what makes either of them take effect. The order is not a technical
+requirement, it is the order of the work: without step 1 there is nothing to
+export to.
+
+### 1. XPlane2Blender — the export half
+
+On Blender 5.x it has to be the **armature build**, not the official release.
+Official releases up to 4.5.0 still read `Action.groups` / `Action.fcurves`,
+which Blender 5 removed, and then export **no animations at all** with no error
+to show for it: the aircraft comes out with every part frozen and the export
+still reports *finished*. The build, the two commands needed to repackage it into
+a zip Blender will actually install, and the version string to check afterwards
+are in [docs/install.md](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/install.md).
+
+### 2. X-Plane OBJ8 Importer — this add-on
+
+**Preferences > Get Extensions > search `X-Plane OBJ8` > Install.** (No platform
+account yet? Drag the release zip onto Blender instead.)
 
 Blender 5.0 or newer.
 
-Exporting is [XPlane2Blender](https://github.com/X-Plane/XPlane2Blender)'s job, so
-install that too — and on Blender 5.x it must be the **armature build**, not the
-official release: the official one still reads `Action.groups` /
-`Action.fcurves`, which Blender 5 removed, and then exports **no animations at
-all** with no error to show for it. That build, and the two commands to unpack
-it, are in
-[docs/install.md](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/install.md).
+The import warns once when it recognises a XPlane2Blender build that cannot write
+animations, so a half-finished setup says so instead of shipping frozen parts.
 
 ## What people ask first
 
