@@ -1,4 +1,4 @@
-# X-Plane OBJ8 Object — import X-Plane `.obj` into XPlane2Blender's scene
+# X-Plane OBJ8 Importer — import X-Plane `.obj` into XPlane2Blender's scene
 
 Import an [X-Plane OBJ8](https://developer.x-plane.com/article/obj8-file-format-specification/)
 `.obj` into a Blender scene that [XPlane2Blender](https://github.com/X-Plane/XPlane2Blender)

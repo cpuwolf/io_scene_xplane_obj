@@ -537,7 +537,7 @@ class FILE_HANDLER_OT_xplane_obj(bpy.types.FileHandler):
     handler claims the extension.
     """
     bl_idname = "IO_FH_xplane_obj"
-    bl_label = "X-Plane OBJ8 Object"
+    bl_label = "X-Plane OBJ8 Importer"
     bl_import_operator = "import_scene.xplane_obj"
     bl_file_extensions = ".obj"
 

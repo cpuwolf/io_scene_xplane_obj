@@ -37,7 +37,7 @@ zip -qr ../io_xplane2blender.zip io_xplane2blender
 lands as a legacy add-on (`scripts/addons/io_xplane2blender`), which is expected
 while 5.x has no extension build.
 
-## 2. X-Plane OBJ8 Object (this add-on)
+## 2. X-Plane OBJ8 Importer (this add-on)
 
 Any of these:
 
@@ -65,7 +65,7 @@ the most common reason for an import that half-works.
 | OS | macOS 26.5 (build 25F71), Apple silicon |
 | Blender | 5.2.2 LTS, built 2026-09-15 01:49:19, hash `d13f752e3b9c` |
 | XPlane2Blender | **4.5.0**, armature build — tag `blender-5x-armature-v1` of `cpuwolf/XPlane2Blender`, commit `bbbf32e` |
-| X-Plane OBJ8 Object | 0.10.4, installed as the extension `bl_ext.user_default.io_scene_xplane_obj` |
+| X-Plane OBJ8 Importer | 0.10.4, installed as the extension `bl_ext.user_default.io_scene_xplane_obj` |
 | Test data | the aircraft X-Plane 12.4.3-r2 (build 124311, Apple silicon) ships |
 
 Checking your own copies:
@@ -79,7 +79,7 @@ Checking your own copies:
 ## Check it worked
 
 * **File > Import > X-Plane OBJ8 (.obj)** exists.
-* Preferences > Add-ons lists both *XPlane2Blender* and *X-Plane OBJ8 Object*.
+* Preferences > Add-ons lists both *XPlane2Blender* and *X-Plane OBJ8 Importer*.
 * Import any `.obj` from an aircraft: if XPlane2Blender is missing you get
   `XPlane2Blender is not installed/enabled: the file was imported, but there is
   no exportable collection for its exporter to write`.

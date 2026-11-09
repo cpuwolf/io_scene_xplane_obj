@@ -4,7 +4,7 @@
 
 ```sh
 ./dev-link.sh            # symlink this repo into Blender's user extension folder
-                         # then enable "X-Plane OBJ8 Object" in Preferences
+                         # then enable "X-Plane OBJ8 Importer" in Preferences
 ```
 
 `objcodec.py` is pure Python (no `bpy`), so the format work can be tested and
