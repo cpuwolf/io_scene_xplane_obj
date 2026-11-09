@@ -134,6 +134,12 @@ def _make_transparent(mat):
         pass
 
 
+#: XPlane2Blender's Material > X-Plane > Surface Type, in the order X-Plane
+#: numbers the surfaces, so ATTR_hard's argument is an index into this.
+SURFACE_TYPES = ("none", "water", "concrete", "asphalt", "grass", "dirt",
+                 "gravel", "lakebed", "snow", "shoulder", "blastpad", "smooth")
+
+
 def _add_custom_attribute(xplane_group, name, value=""):
     """Add (or update) a XPlane2Blender custom attribute by name.
 
@@ -1107,23 +1113,31 @@ class _Converter(object):
                             slot.material.specular_intensity = value
 
     def _apply_surface_state(self, ob, state):
-        """blend / shadow / poly_os / cull -> the matching material properties.
+        """blend / shadow / poly_os / cull / hard / draped / hud / depth.
 
-        ATTR_cull and ATTR_no_cull go to Blender's own ``use_backface_culling``
-        rather than an XPlane2Blender field (it has none): every material starts
-        out single-sided, and ATTR_no_cull is the exception that gets a copy
-        with culling switched off.  ATTR_hard, ATTR_depth, ATTR_draped and
-        ATTR_hud_glass are still left as warnings: each either needs a table we
-        would be guessing at (ATTR_hard takes a surface number) or has no
-        XPlane2Blender field at all, and a wrong guess changes how the object
-        renders.  ATTR_draped is also rejected outright by XP2B outside scenery
-        objects ("Must not be draped"), which is where that experiment ended.
+        Every state line in the table now has a home:
+
+        * blend, shadow, poly_os -> the matching XPlane2Blender material fields
+        * cull -> Blender's own ``use_backface_culling`` (XP2B has no field for
+          it) plus an ATTR_no_cull custom attribute so the export keeps the line
+        * hard -> Material > X-Plane > Surface Type (and Deck), indexed by the
+          number ATTR_hard carries
+        * draped -> Material > X-Plane > Draped
+        * hud_glass -> Object > X-Plane > HUD Glass
+        * depth -> XPlane2Blender has no field at all, so the line rides along
+          as a custom attribute, which is written back verbatim
+
+        ATTR_draped is scenery-only in X-Plane and XP2B cancels the export on a
+        non-scenery object that sets it ("Must not be draped"), so that one is
+        reported rather than silently applied.
         """
         blend = {"ATTR_blend": "on", "ATTR_no_blend": "off",
                  "ATTR_shadow_blend": "shadow"}
         flags = {"ATTR_shadow": ("shadow_local", True),
                  "ATTR_no_shadow": ("shadow_local", False)}
         cull = {"ATTR_cull": True, "ATTR_no_cull": False}
+        draped = {"ATTR_draped": True, "ATTR_no_draped": False}
+        hud = {"ATTR_hud_glass": True, "ATTR_hud_reset": False}
         for cat, raws in state or []:
             for raw in raws:
                 words = raw.split()
@@ -1137,6 +1151,32 @@ class _Converter(object):
                     self._material_set(ob, [(field, value)], kw[:12])
                 elif kw in cull:
                     self._set_backface_culling(ob, cull[kw], kw[:12])
+                elif kw in ("ATTR_hard", "ATTR_hard_deck"):
+                    # the argument is a surface NAME, not a number: "Starting in
+                    # X-Plane 8.50 ATTR_hard can be followed by an additional
+                    # surface name"; no argument means a smooth surface
+                    name = words[1].strip().lower() if len(words) > 1 else "smooth"
+                    if name not in SURFACE_TYPES:
+                        self.warn("%s: %s has an unknown surface %r"
+                                  % (ob.name, kw, name))
+                        continue
+                    pairs = [("surfaceType", name)]
+                    if kw == "ATTR_hard_deck":
+                        pairs.append(("deck", True))
+                    self._material_set(ob, pairs, "hard")
+                elif kw == "ATTR_no_hard":
+                    self._material_set(ob, [("surfaceType", "none"),
+                                            ("deck", False)], "nohard")
+                elif kw in draped:
+                    self._material_set(ob, [("draped", draped[kw])], kw[:12])
+                elif kw in hud:
+                    try:
+                        ob.xplane.hud_glass = hud[kw]
+                    except AttributeError:
+                        self.warn("%s: this XPlane2Blender has no hud_glass "
+                                  "field" % ob.name)
+                elif kw in ("ATTR_depth", "ATTR_no_depth"):
+                    _add_custom_attribute(ob.xplane, kw)
                 elif kw == "ATTR_poly_os" and len(words) > 1:
                     try:
                         value = int(float(words[1]))
@@ -1471,7 +1511,8 @@ class _Converter(object):
         # file comes back looking fine with a state line silently missing
         keep = {"manip", "draw", "light_level", "camera", "shiny", "shade",
                 "blend", "shadow", "poly_os", "cockpit", "detent_range",
-                "detent_axis", "manip_wheel", "manip_keyframe", "cull"}
+                "detent_axis", "manip_wheel", "manip_keyframe", "cull",
+                "hard", "draped", "hud", "depth"}
         for cat, raws in state or []:
             if cat in keep:
                 continue
