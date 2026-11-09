@@ -858,6 +858,11 @@ class _Converter(object):
             anchors[block.index] = parent if parent is not None else _Anchor(
                 obj=self.root)
 
+        # Lights need the block anchors, so they are built here rather than with
+        # the rest of the file: a light inside an ANIM block has to ride that
+        # block's bone, exactly like the geometry
+        lights_made = self._build_lights(obj8, coll, anchors)
+
         self._report_dropped_commands(obj8)
 
         frame_end = max(1, self.frames_used)
@@ -922,7 +927,7 @@ class _Converter(object):
             self._check_state(state, ob.name)
             made += 1
 
-        if not made:
+        if not made and not lights_made:
             self.warn("%s: no geometry was moved" % base)
 
         if self.specs:
@@ -1030,21 +1035,127 @@ class _Converter(object):
         except (AttributeError, IndexError):
             pass
 
-    def _report_dropped_commands(self, obj8):
-        """Lights and IF blocks are commands XPlane2Blender cannot take from us
-        - say how many, per file. Silence here would look like success.
+    def _make_light(self, words, coll):
+        """One LIGHT_* line -> one Blender light object.
 
-        ATTR_LOD is no longer in this list: it becomes the collection's LOD
-        levels (see ``_apply_lods``).
+        XPlane2Blender exports lights from light *objects*: the position comes
+        from the object and the rest of the line goes into the light data
+        verbatim, so the argument text is kept as-is instead of being parsed
+        into fields (every light name has its own parameter list).
+        """
+        kw = words[0]
+        if kw == "LIGHT_PARAM":
+            if len(words) < 5:
+                return None
+            name = words[1]
+            try:
+                pos = (float(words[2]), float(words[3]), float(words[4]))
+            except ValueError:
+                return None
+            params = " ".join(words[5:])
+            if not params:
+                # X-Plane accepts a param light with no arguments, but XP2B
+                # rejects one with an empty parameter box and cancels the whole
+                # export - so this line has to stay unconverted, loudly.
+                self.warn("%s: LIGHT_PARAM %s has no parameters; XPlane2Blender "
+                          "cancels an export over an empty parameter box, so the "
+                          "line was not converted"
+                          % (coll.xplane.layer.name, name))
+                return None
+            light_type = "param"
+        elif kw == "LIGHT_NAMED":
+            if len(words) < 5:
+                return None
+            name = words[1]
+            try:
+                pos = (float(words[2]), float(words[3]), float(words[4]))
+            except ValueError:
+                return None
+            params = ""
+            light_type = "named"
+        else:
+            return None
+
+        data = bpy.data.lights.new(name, 'POINT')
+        try:
+            data.xplane.type = light_type
+            data.xplane.name = name
+            data.xplane.params = params
+        except (AttributeError, TypeError) as exc:
+            self.warn("%s: could not configure the light: %s" % (name, exc))
+            return None
+        ob = bpy.data.objects.new(name, data)
+        ob.location = _xp_to_bl(pos)
+        ob.rotation_mode = 'XYZ'
+        coll.objects.link(ob)
+        return ob
+
+    def _build_lights(self, obj8, coll, anchors=None):
+        """Turn every LIGHT_* line into a light object; returns how many.
+
+        A file can be nothing but lights (Cessna_172SP lights.obj has
+        POINT_COUNTS 0 0 0 0 and sixteen LIGHT_PARAM lines), and dropping those
+        left an empty collection behind.
+
+        A light inside an ANIM block rides that block's anchor, the same way the
+        geometry does.  Leaving them all at the collection root exports every
+        light outside the ANIM block it came from, and a nav light driven by
+        ``sim/flightmodel2/wing/rudder1_deg`` then stops following the rudder.
+        """
+        by_begin = {}
+        for blk in getattr(self.anim, "blocks", None) or []:
+            if getattr(blk, "begin_ev", None) is not None:
+                by_begin[blk.begin_ev] = blk
+        stack = []
+        made = 0
+        skipped = 0
+        for ev_index, (kind, payload) in enumerate(obj8.events):
+            if kind == OC.EV_ANIM_BEGIN:
+                stack.append(by_begin.get(ev_index))
+                continue
+            if kind == OC.EV_ANIM_END:
+                if stack:
+                    stack.pop()
+                continue
+            if kind != OC.EV_RAW or not payload:
+                continue
+            words = payload.split()
+            if not words or not words[0].startswith("LIGHT"):
+                continue
+            ob = self._make_light(words, coll)
+            if ob is None:
+                skipped += 1
+                continue
+            made += 1
+            anchor = None
+            if anchors:
+                for blk in reversed(stack):
+                    if blk is not None and blk.index in anchors:
+                        anchor = anchors[blk.index]
+                        break
+            if anchor is not None:
+                anchor.attach(ob)
+            elif getattr(self, "root", None) is not None:
+                _Anchor(obj=self.root).attach(ob)
+        if skipped:
+            self.warn("%s: %d light line(s) could not be converted"
+                      % (coll.xplane.layer.name, skipped))
+        return made
+
+    def _report_dropped_commands(self, obj8):
+        """IF blocks are commands XPlane2Blender cannot take from us - say how
+        many, per file. Silence here would look like success.
+
+        ATTR_LOD becomes the collection's LOD levels (see ``_apply_lods``) and
+        LIGHT_* becomes light objects (see ``_build_lights``), so neither is in
+        this list any more.
         """
         counts = {}
         for kind, payload in obj8.events:
             if kind != OC.EV_RAW or not payload:
                 continue
             kw = payload.split()[0]
-            if kw.startswith("LIGHT"):
-                key = "LIGHT_* primitives"
-            elif kw in ("IF", "ENDIF"):
+            if kw in ("IF", "ENDIF"):
                 key = "IF/ENDIF blocks"
             elif kw.startswith("MAGNET"):
                 key = "MAGNET entries"
