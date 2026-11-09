@@ -106,6 +106,33 @@ try:
     print("exported %d file(s): %d ANIM_ line(s), %d TRIS line(s)"
           % (len(files), anims, tris), flush=True)
 
+    # A clean fixture exports without logging anything, so a crash *in the
+    # logging path* is invisible here - that is exactly how a build shipped
+    # where the first message the exporter logged died with UnboundLocalError
+    # (the counter was reachable only as a package attribute upstream). Exercise
+    # both: the message itself, and the error the exporter raises for a mesh
+    # with no material.
+    from xp8_smoke.xplane2blender.xplane_helpers import XPlaneLogger
+    try:
+        XPlaneLogger.messageToString("info", "smoke", None)
+        XPlaneLogger.messageToString("error", "smoke", None)
+    except Exception as exc:                              # noqa: BLE001
+        fail("logging a message raised %r - the export dies on the first line "
+             "it has to report" % exc)
+    print("logger: messageToString() survives a message", flush=True)
+
+    me = bpy.data.meshes.new("smoke_nomat")
+    me.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [], [(0, 1, 2)])
+    me.update()
+    ob = bpy.data.objects.new("smoke_nomat", me)
+    colls[0].objects.link(ob)
+    try:
+        XF.createFilesFromBlenderRootObjects(bpy.context.scene,
+                                             bpy.context.view_layer)
+    except Exception as exc:                              # noqa: BLE001
+        fail("a mesh with no material crashed the exporter: %r" % exc)
+    print("a material-less mesh is reported, not crashed", flush=True)
+
     mod.unregister()
     print("RESULT: PASS", flush=True)
 finally:

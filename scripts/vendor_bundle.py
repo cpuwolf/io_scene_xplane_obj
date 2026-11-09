@@ -43,9 +43,13 @@ FIXES = [
     ("xplane_helpers.py",
      "import io_xplane2blender\n",
      ""),
+    # the counter is a module global upstream reached through the package name;
+    # a bare name in an assignment makes it a *local*, so say `global` or every
+    # log message dies with UnboundLocalError
     ("xplane_helpers.py",
-     "io_xplane2blender.xplane_helpers.message_to_str_count += 1",
-     "message_to_str_count += 1"),
+     "        io_xplane2blender.xplane_helpers.message_to_str_count += 1",
+     "        global message_to_str_count\n"
+     "        message_to_str_count += 1"),
     ("xplane_helpers.py",
      "if io_xplane2blender.xplane_helpers.message_to_str_count == 1:",
      "if message_to_str_count == 1:"),
