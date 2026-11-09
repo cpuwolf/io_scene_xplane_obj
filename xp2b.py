@@ -143,21 +143,26 @@ SURFACE_TYPES = ("none", "water", "concrete", "asphalt", "grass", "dirt",
 MAX_LOD_LEVELS = 4
 
 
-def _add_custom_attribute(xplane_group, name, value=""):
+def _add_custom_attribute(xplane_group, name, value="", unique=True):
     """Add (or update) a XPlane2Blender custom attribute by name.
 
     Custom attributes are written to the OBJ verbatim, so they are the way to
     carry a state line XPlane2Blender has no field of its own for - ATTR_no_cull
     is one of them.
+
+    ``unique=False`` appends even when the name is already taken, for the
+    commands that may repeat in one batch: ATTR_axis_detent_range appears once
+    per detent, and a second one must not overwrite the first.
     """
     try:
         coll = xplane_group.customAttributes
     except AttributeError:
         return
-    for attr in coll:
-        if attr.name == name:
-            attr.value = value
-            return
+    if unique:
+        for attr in coll:
+            if attr.name == name:
+                attr.value = value
+                return
     attr = coll.add()
     attr.name = name
     attr.value = value
@@ -386,10 +391,21 @@ def _apply_drag_rotate(manip, state, args, warnings, rig):
                 "XPlane2Blender cannot express the lift" % dataref2)
             return False
         if ranges:
+            # XPlane2Blender writes ATTR_axis_detent_range only for its detent
+            # variants, and this rotation has no detent bone to make one.  A
+            # custom attribute is emitted verbatim right after the manipulator,
+            # which is the slot the file wants the ranges in - so the visual
+            # detents survive even though the lift is not imported.
+            for start, end, height in ranges:
+                _add_custom_attribute(manip.id_data.xplane,
+                                      "ATTR_axis_detent_range",
+                                      "%g %g %g" % (start, end, height),
+                                      unique=False)
             warnings.append(
-                "%s: %d ATTR_axis_detent_range line(s) dropped - the rotation "
-                "has no detent bone, and XPlane2Blender writes ranges only for "
-                "the detent variants" % (manip.id_data.name, len(ranges)))
+                "%s: %d ATTR_axis_detent_range line(s) kept as custom attributes "
+                "- the rotation has no detent bone, so XPlane2Blender would "
+                "write no range of its own"
+                % (manip.id_data.name, len(ranges)))
         manip.type = "drag_rotate"
     else:
         if dataref2 == "none":
@@ -941,6 +957,8 @@ class _Converter(object):
             self._check_state(state, ob.name)
             made += 1
 
+        self._apply_magnets(obj8, leaf_objs)
+
         if not made and not lights_made:
             self.warn("%s: no geometry was moved" % base)
 
@@ -1171,8 +1189,6 @@ class _Converter(object):
             kw = payload.split()[0]
             if kw in ("IF", "ENDIF"):
                 key = "IF/ENDIF blocks"
-            elif kw.startswith("MAGNET"):
-                key = "MAGNET entries"
             else:
                 continue
             counts[key] = counts.get(key, 0) + 1
@@ -1465,12 +1481,81 @@ class _Converter(object):
                     continue
                 ob.xplane.manip.wheel_delta = delta
 
+    def _apply_magnets(self, obj8, leaf_objs):
+        """MAGNET (a VR tablet / flashlight mount point, 1110+) -> custom attribute.
+
+        XPlane2Blender has no field for it.  An object's custom attributes are
+        written back verbatim, and X-Plane pins a magnet in model space - so
+        riding the first object that has geometry puts the line into the command
+        stream without moving the magnet, and writes it exactly once (the state
+        snapshot is per-part, so a MAGNET parked there would reappear on every
+        object after it).
+        """
+        lines = []
+        for kind, payload in obj8.events:
+            if kind != OC.EV_RAW or not payload:
+                continue
+            words = payload.split()
+            if words and words[0] == "MAGNET":
+                lines.append(payload)
+        if not lines:
+            return
+        host = None
+        for name in leaf_objs:
+            if not name:
+                continue
+            ob = bpy.data.objects.get(name)
+            if ob is not None and ob.type == 'MESH':
+                host = ob
+                break
+        if host is None:
+            self.warn("%d MAGNET entr%s were dropped: the file has no geometry "
+                      "to carry them"
+                      % (len(lines), "y" if len(lines) == 1 else "ies"))
+            return
+        for line in lines:
+            words = line.split(None, 1)
+            _add_custom_attribute(host.xplane, "MAGNET",
+                                  words[1] if len(words) > 1 else "",
+                                  unique=False)
+        self.warn("%d MAGNET entr%s kept as custom attributes on %s; "
+                  "XPlane2Blender has no field for them"
+                  % (len(lines), "y" if len(lines) == 1 else "ies", host.name))
+
+    @staticmethod
+    def _detent_lift(state):
+        """How far ATTR_axis_detented moves its bone, in model units.
+
+        XPlane2Blender validates every ``ATTR_axis_detent_range`` height against
+        the bone's own travel, so the importer has to know that travel before it
+        can decide whether the table is writable at all.
+        """
+        for cat, raws in state or []:
+            if cat != "detent_axis":
+                continue
+            for raw in raws:
+                words = raw.split()
+                if not words or words[0] != "ATTR_axis_detented" or len(words) < 4:
+                    continue
+                try:
+                    dx, dy, dz = (float(words[1]), float(words[2]), float(words[3]))
+                except ValueError:
+                    continue
+                return (dx * dx + dy * dy + dz * dz) ** 0.5
+        return None
+
     def _apply_detent_ranges(self, ob, state):
         """ATTR_axis_detent_range <start> <end> <height> -> the manipulator's
         *Axis Detent Ranges* table (object > X-Plane > Manipulator).
 
         One line per region, in file order.  XPlane2Blender writes them back as
-        the same three numbers, so the table is the whole conversion.
+        the same three numbers, so the table is the whole conversion - except
+        when a height is outside the detent bone's travel: XP2B validates that
+        ("Height ... must be between 0.0 and the maximum lift height") and
+        cancels the entire export.  Laminar's own L-5 Sentinel asks for height
+        1.0 on a bone that lifts 0.015, so that case has to survive too: the
+        lines go to the object's custom attributes, which are written verbatim,
+        and the sim reads the same table back.
         """
         if not ob.xplane.manip.enabled:
             # the ranges only exist on a manipulator, and this one has none:
@@ -1481,6 +1566,7 @@ class _Converter(object):
                     self.warn("%s: ATTR_axis_detent_range dropped - its "
                               "manipulator is not converted" % ob.name)
             return
+        ranges = []
         for cat, raws in state or []:
             if cat != "detent_range":
                 continue
@@ -1494,10 +1580,65 @@ class _Converter(object):
                     self.warn("%s: ATTR_axis_detent_range needs three numbers (%s)"
                               % (ob.name, raw))
                     continue
-                item = ob.xplane.manip.axis_detent_ranges.add()
-                item.start = start
-                item.end = end
-                item.height = height
+                ranges.append((start, end, height))
+        if not ranges:
+            if ob.xplane.manip.type == "drag_axis_detent":
+                # the file marked a detent but no range reached this object, and
+                # XPlane2Blender refuses a drag_axis_detent that carries none
+                # ("must have axis detent ranges") - drop to a plain axis and
+                # keep the marker verbatim so the sim still reads it
+                ob.xplane.manip.type = "drag_axis"
+                for cat, raws in state or []:
+                    if cat != "detent_axis":
+                        continue
+                    for raw in raws:
+                        words = raw.split(None, 1)
+                        if words and words[0] == "ATTR_axis_detented":
+                            _add_custom_attribute(
+                                ob.xplane, "ATTR_axis_detented",
+                                words[1] if len(words) > 1 else "", unique=False)
+                self.warn(
+                    "%s: ATTR_axis_detented kept as a custom attribute - no "
+                    "ATTR_axis_detent_range reached this object, and "
+                    "XPlane2Blender cancels an export over a detent with no "
+                    "ranges" % ob.name)
+            return
+        lift = self._detent_lift(state)
+        if lift is not None and any(h < -1e-4 or h > lift + 1e-4
+                                    for _s, _e, h in ranges):
+            # Demote the manipulator first: XPlane2Blender refuses a
+            # drag_axis_detent that carries no table ("must have axis detent
+            # ranges"), so the type has to go back to a plain axis.  The two
+            # lines that make it a detent in the sim then ride the custom
+            # attributes, in file order - XP2B writes them after the manipulator
+            # and before the geometry, which is where the file had them.
+            ob.xplane.manip.type = "drag_axis"
+            for cat, raws in state or []:
+                if cat != "detent_axis":
+                    continue
+                for raw in raws:
+                    words = raw.split(None, 1)
+                    if words and words[0] == "ATTR_axis_detented":
+                        _add_custom_attribute(
+                            ob.xplane, "ATTR_axis_detented",
+                            words[1] if len(words) > 1 else "", unique=False)
+            for start, end, height in ranges:
+                _add_custom_attribute(ob.xplane, "ATTR_axis_detent_range",
+                                      "%g %g %g" % (start, end, height),
+                                      unique=False)
+            self.warn(
+                "%s: %d ATTR_axis_detent_range line(s) kept as custom attributes "
+                "- a height of %.3f is outside the %.3f the detent bone lifts, "
+                "which XPlane2Blender cancels an export over; the manipulator "
+                "exports as a plain drag axis"
+                % (ob.name, len(ranges),
+                   max(h for _s, _e, h in ranges), lift))
+            return
+        for start, end, height in ranges:
+            item = ob.xplane.manip.axis_detent_ranges.add()
+            item.start = start
+            item.end = end
+            item.height = height
 
     def _apply_cockpit_state(self, ob, state, coll):
         """ATTR_cockpit* -> material Cockpit Feature + the layer's panel mode.
