@@ -15,3 +15,4 @@ dist/
 verify/_roundtrip.obj
 verify/*.blend1
 verify/tmp/
+xplane2blender/

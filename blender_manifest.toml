@@ -6,7 +6,7 @@ schema_version = "1.0.0"
 # extensions/<repo>/io_scene_xplane_obj/.
 
 id = "io_scene_xplane_obj"
-version = "0.11.2"
+version = "0.11.3"
 name = "X-Plane OBJ8 Import and Export"
 tagline = "Import and export X-Plane .obj and .acf in one install"
 maintainer = "Wei Shuai"
@@ -47,6 +47,10 @@ paths_exclude_pattern = [
   "/.git/",
   "/.github/",
   "/.gitignore",
+  "/.gitmodules",
+  "/vendor/",     # the exporter's submodule: scripts/vendor_bundle.py
+                # copies it into xplane2blender/ at build time, and that
+                # generated directory is what ships
   "/.DS_Store",
   "/dist/",
   "/verify/",

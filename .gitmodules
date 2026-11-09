@@ -1,0 +1,3 @@
+[submodule "vendor/XPlane2Blender"]
+	path = vendor/XPlane2Blender
+	url = https://github.com/cpuwolf/XPlane2Blender.git

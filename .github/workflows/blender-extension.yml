@@ -29,6 +29,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0    # the tag annotation becomes the release notes
+          submodules: recursive   # the exporter lives in its own repository
 
       - name: Install Blender
         run: |
@@ -57,6 +58,14 @@ jobs:
             echo "::error::blender_manifest.toml says $manifest but the tag is $tag"
             exit 1
           fi
+
+      - name: Materialise the bundled exporter
+        run: |
+          set -euo pipefail
+          # xplane2blender/ is generated and gitignored: the submodule holds the
+          # upstream history, this script copies it with the imports made
+          # relative and refuses to continue if any old name is left behind.
+          python3 scripts/vendor_bundle.py
 
       - name: Build and validate
         run: |

@@ -18,21 +18,23 @@ features depend on another add-on.
   GPL-2.0-or-later. Both allow redistribution here under GPL-3.0-or-later; this
   package ships as `SPDX:GPL-3.0-or-later` and keeps every upstream file's own
   header untouched.
-* Source: the `blender-5x-armature-v1` build of `cpuwolf/XPlane2Blender`, commit
-  `bbbf32e`, which is XPlane2Blender 4.5.0 plus the Blender 5.x armature fix.
+* Source: `cpuwolf/XPlane2Blender` (XPlane2Blender 4.5.0 plus the Blender 5.x
+  armature work), tracked here as the submodule `vendor/XPlane2Blender` and
+  pinned to the commit recorded in `.gitmodules` — that pin, not a copy inside
+  this repository, is the authoritative revision and it keeps upstream's own
+  history.
 
-What was changed when vendoring it, and nothing else:
+What is changed when packaging it, and nothing else — `scripts/vendor_bundle.py`
+does both, so the submodule itself stays untouched:
 
 1. Imports that named the package absolutely (`from io_xplane2blender.x import y`)
    are relative (`from .x import y`), because the package now lives inside this
    one and must not borrow the standalone add-on's top-level name.
-2. The six places that did `import io_xplane2blender` and then walked its
-   attributes now import the module they use.
-3. `tests/` keeps only the three modules the runtime imports; its own test
-   fixtures are not shipped.
+2. The places that did `import io_xplane2blender` and then walked its attributes
+   import the module they use instead.
 
-Everything else — operators, panels, properties, the updater, resources — is
-upstream code at the commit above.
+Everything else — operators, panels, properties, the updater, resources, tests —
+is upstream code at the pinned commit.
 
 ## Test data
 

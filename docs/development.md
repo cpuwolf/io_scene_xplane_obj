@@ -61,30 +61,44 @@ gets the export path for free; one that only enables the *standalone* legacy
 add-on is testing that copy instead, and without either it reports "the file was
 imported, but there is no exportable collection".
 
-## The bundled exporter (`xplane2blender/`)
+## The bundled exporter (`vendor/XPlane2Blender` -> `xplane2blender/`)
 
-The export half is XPlane2Blender's armature build, carried verbatim so that one
-install imports and exports — a platform rule, not a preference: ToS 5.2/5.3
-forbid a feature that depends on another extension, "even if it is optional".
+The export half is XPlane2Blender's armature build, bundled because the platform
+forbids a feature that depends on another extension (ToS 5.2/5.3, "even if it is
+optional"). Its *history* stays in its own repository: the fork is a submodule at
+`vendor/XPlane2Blender`, pinned in `.gitmodules`, so `git log` there is the real
+one and this repository only records which commit it shipped.
 
-Rules for touching it:
+What ships is **generated**: `scripts/vendor_bundle.py` copies the submodule into
+`xplane2blender/` (gitignored) and applies exactly two transformations — absolute
+`from io_xplane2blender.x import y` becomes relative, and the eight places that
+walked the package's attributes name the module instead. It exits non-zero if any
+`io_xplane2blender` reference survives, so an upstream rename cannot ship a
+package that fails at import time.
 
-* **Only three kinds of change are allowed**, and they are the three already
-  made: absolute imports became relative, the six files that walked
-  `io_xplane2blender.<attr>` name the module instead, and `tests/` keeps only the
-  modules the runtime imports. Everything else is upstream at commit `bbbf32e`
-  of `cpuwolf/XPlane2Blender` — so a bug here is reported upstream, not patched
-  in place, unless it blocks the export on Blender 5.x.
-* **No `sys.modules` alias for the package name.** Mapping `io_xplane2blender`
-  onto `xplane2blender` gives one file two module objects when a standalone copy
-  is also enabled, i.e. two counters, two updaters and two registration passes.
-* **`xplane2blender/tests/` has to stay in the package.** `xplane_file.py` and
+Working on it:
+
+```sh
+git submodule update --init                     # once, after cloning
+python3 scripts/vendor_bundle.py                 # after any submodule change
+git -C vendor/XPlane2Blender checkout <commit>   # to move the pinned commit
+```
+
+* **Never edit `xplane2blender/`** — it is deleted and rebuilt on every run. A
+  fix belongs in the submodule, or (if it is only about living inside this
+  package) in `FIXES` in the script.
+* **No `sys.modules` alias for the old name.** Mapping `io_xplane2blender` onto
+  `xplane2blender` loads every submodule twice, which gives two counters, two
+  updaters and two registration passes in a session that also has a standalone
+  XPlane2Blender enabled.
+* **`xplane2blender/tests/` ships.** `xplane_file.py` and
   `xplane_wiper_gradient.py` import `test_creation_helpers` at runtime; excluding
   it produces a zip `extension validate` accepts and that fails to register with
   `No module named ...xplane2blender.tests`.
-* **`verify/bundle_smoke.py` is the gate**, not `extension validate`: it unzips
-  the artifact, registers it, imports `verify/fixtures/nested.obj` and asserts
-  the export carries `ANIM_` lines (25 of them). It runs in CI on every tag.
+* **CI runs the script** after `checkout (submodules: recursive)`, and
+  `verify/bundle_smoke.py` is the gate that matters: it unzips the artifact,
+  registers it, imports `verify/fixtures/nested.obj` and asserts the export
+  carries `ANIM_` lines (25 of them).
 
 ## The pinned test environment
 
