@@ -942,30 +942,25 @@ _own_xp2b = False
 
 
 def _standalone_xp2b_enabled():
-    """True when a separately installed XPlane2Blender is enabled."""
+    """True when the preferences list a separately installed XPlane2Blender."""
     try:
         return _STANDALONE_XP2B in bpy.context.preferences.addons.keys()
     except AttributeError:
         return False
 
 
-def _register_xp2b():
-    """Register the bundled XPlane2Blender; False when one was already running.
-
-    The export half only exists as a 4.x-era add-on, and on Blender 5.x only the
-    armature build writes animations at all, so this package carries that build
-    as `xplane2blender/` and registers it together with ours.  A user who already
-    has a standalone XPlane2Blender enabled keeps theirs: registering both would
-    put two of every operator and panel in the UI, and two exporters writing the
-    same file.
-    """
-    global _own_xp2b
-    if _own_xp2b:
-        return True
-    if _standalone_xp2b_enabled():
-        print("xplane_obj: a standalone XPlane2Blender is enabled - using it "
-              "instead of the bundled one", flush=True)
+def _xp2b_props_present():
+    """True when something has already registered XPlane2Blender's properties."""
+    try:
+        return ("xplane" in bpy.types.Object.bl_rna.properties
+                and "xplane" in bpy.types.Collection.bl_rna.properties)
+    except AttributeError:                                # headless oddity
         return False
+
+
+def _register_xp2b_now():
+    """Import and register the bundled copy; False if that failed."""
+    global _own_xp2b
     try:
         from . import xplane2blender
         xplane2blender.register()
@@ -975,6 +970,42 @@ def _register_xp2b():
         return False
     _own_xp2b = True
     return True
+
+
+def _register_xp2b_after_startup():
+    """Decide once the standalone add-on has had its chance to load.
+
+    A preferences entry is not proof the other add-on is there: Blender keeps an
+    add-on listed after its files are deleted ("Add-on not loaded: ... No module
+    named 'io_xplane2blender'"), and then nothing provides the `xplane`
+    properties and the export dies on `Object.xplane` with no word about the
+    missing add-on. So a listed-but-absent standalone means the bundle takes over.
+    """
+    if not _own_xp2b and not _xp2b_props_present():
+        print("xplane_obj: the standalone XPlane2Blender is enabled but did not "
+              "load - registering the bundled one", flush=True)
+        _register_xp2b_now()
+    return None                       # one shot, do not repeat
+
+
+def _register_xp2b():
+    """Register an exporter: the bundled one, unless another already provides it."""
+    if _own_xp2b:
+        return True
+    if _xp2b_props_present():
+        print("xplane_obj: another XPlane2Blender is registered - using it "
+              "instead of the bundled one", flush=True)
+        return False
+    if _standalone_xp2b_enabled() and not bpy.app.background:
+        # it may still be loading; `-b` has loaded every add-on before scripts
+        # run, so there it is already decided
+        try:
+            bpy.app.timers.register(_register_xp2b_after_startup,
+                                    first_interval=0.0)
+            return False
+        except (AttributeError, ValueError):
+            pass
+    return _register_xp2b_now()
 
 
 def register():

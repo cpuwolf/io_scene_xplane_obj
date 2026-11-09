@@ -41,7 +41,7 @@ If something misbehaves, match these versions first.
 | --- | --- |
 | OS | macOS 26.5 (build 25F71), Apple silicon |
 | Blender | 5.2.2 LTS, built 2026-09-15 01:49:19, hash `d13f752e3b9c` |
-| X-Plane OBJ8 Import and Export | 0.11.4, installed as the extension `bl_ext.user_default.io_scene_xplane_obj` |
+| X-Plane OBJ8 Import and Export | 0.11.5, installed as the extension `bl_ext.user_default.io_scene_xplane_obj` |
 | Exporter | bundled XPlane2Blender **4.5.0 armature build** — tag `blender-5x-armature-v1` of `cpuwolf/XPlane2Blender`, commit `bbbf32e` |
 | Test data | the aircraft X-Plane 12.4.3-r2 (build 124311, Apple silicon) ships |
 
