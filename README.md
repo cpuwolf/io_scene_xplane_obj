@@ -1,4 +1,4 @@
-# X-Plane OBJ8 Import & Export — `.obj` and `.acf`, in and out of Blender
+# X-Plane OBJ8 Import and Export — `.obj` and `.acf`, in and out of Blender
 
 Import an [X-Plane OBJ8](https://developer.x-plane.com/article/obj8-file-format-specification/)
 `.obj` into a Blender scene you can edit — geometry, materials, animations,

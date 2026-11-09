@@ -41,7 +41,7 @@ If something misbehaves, match these versions first.
 | --- | --- |
 | OS | macOS 26.5 (build 25F71), Apple silicon |
 | Blender | 5.2.2 LTS, built 2026-09-15 01:49:19, hash `d13f752e3b9c` |
-| X-Plane OBJ8 Import & Export | 0.11.0, installed as the extension `bl_ext.user_default.io_scene_xplane_obj` |
+| X-Plane OBJ8 Import and Export | 0.11.2, installed as the extension `bl_ext.user_default.io_scene_xplane_obj` |
 | Exporter | bundled XPlane2Blender **4.5.0 armature build** — tag `blender-5x-armature-v1` of `cpuwolf/XPlane2Blender`, commit `bbbf32e` |
 | Test data | the aircraft X-Plane 12.4.3-r2 (build 124311, Apple silicon) ships |
 
@@ -59,7 +59,7 @@ Checking your own copies:
 
 * **File > Import > X-Plane OBJ8 (.obj)** exists, and so does **File > Export >
   X-Plane Object (.obj)**.
-* Preferences > Get Extensions > Installed lists *X-Plane OBJ8 Import & Export*.
+* Preferences > Get Extensions > Installed lists *X-Plane OBJ8 Import and Export*.
 * Import any `.obj` from an aircraft, then export it: the written file carries
   its `ANIM_` blocks. If the export finishes and the file has no `ANIM_` line,
   the exporter did not register — the console has the reason, and the import says
