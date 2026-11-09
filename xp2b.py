@@ -139,6 +139,9 @@ def _make_transparent(mat):
 SURFACE_TYPES = ("none", "water", "concrete", "asphalt", "grass", "dirt",
                  "gravel", "lakebed", "snow", "shoulder", "blastpad", "smooth")
 
+#: XPlane2Blender's MAX_LODS is 5, and level 0 is "None", so four ranges fit.
+MAX_LOD_LEVELS = 4
+
 
 def _add_custom_attribute(xplane_group, name, value=""):
     """Add (or update) a XPlane2Blender custom attribute by name.
@@ -816,6 +819,9 @@ class _Converter(object):
         coll.xplane.layer.name = base
         coll.xplane.layer.export_type = "aircraft"
         self._apply_texture_options(obj8, coll)
+        # ATTR_LOD lives on the collection (XPlane2Blender's model), and every
+        # leaf is tagged with the level it was drawn under
+        leaf_level = self._apply_lods(obj8, coll)
 
         leaf_objs = json.loads(header.get(XM.PROP_LEAF_OBJS, "[]"))
         leaf_states = json.loads(header.get(XM.PROP_LEAF_STATES, "[]"))
@@ -903,6 +909,7 @@ class _Converter(object):
                    for cat, raws in state):
                 self._no_draw_material(ob, base)
             self._apply_light_level(ob, state)
+            self._apply_leaf_lod(ob, leaf_index, leaf_level)
             self._apply_camera_state(ob, state)
             self._apply_shade_and_shiny(ob, state)
             self._apply_surface_state(ob, state)
@@ -963,9 +970,73 @@ class _Converter(object):
         layer.normal_metalness = obj8.global_value("NORMAL_METALNESS") is not None
         layer.blend_glass = obj8.global_value("BLEND_GLASS") is not None
 
+    def _apply_lods(self, obj8, coll):
+        """ATTR_LOD -> the collection's LOD levels; returns {leaf: level index}.
+
+        ATTR_LOD is a stream command: geometry after it draws within that
+        distance range until the next one, and a file may have several
+        (F4D_Wings.obj has 0-1000 then 0-4000).  XPlane2Blender keeps the ranges
+        on the collection and marks each object with the levels it belongs to,
+        so the ranges are collected in file order and every leaf is tagged with
+        the index it fell under.
+        """
+        ranges = []
+        leaf_level = {}
+        current = None
+        for kind, payload in obj8.events:
+            if kind == OC.EV_RAW and payload:
+                words = payload.split()
+                if words and words[0] == "ATTR_LOD" and len(words) >= 3:
+                    try:
+                        pair = (int(float(words[1])), int(float(words[2])))
+                    except ValueError:
+                        self.warn("%s: ATTR_LOD arguments are not numbers"
+                                  % coll.xplane.layer.name)
+                        continue
+                    if pair not in ranges:
+                        ranges.append(pair)
+                    current = pair
+            elif kind == OC.EV_LEAF and current is not None:
+                leaf_level[payload] = ranges.index(current)
+
+        if not ranges:
+            return leaf_level
+        if len(ranges) > MAX_LOD_LEVELS:
+            self.warn("%s: %d ATTR_LOD ranges, XPlane2Blender holds %d - the "
+                      "rest are dropped"
+                      % (coll.xplane.layer.name, len(ranges), MAX_LOD_LEVELS))
+            ranges = ranges[:MAX_LOD_LEVELS]
+
+        layer = coll.xplane.layer
+        try:
+            layer.lods = str(len(ranges))
+            for i, (near, far) in enumerate(ranges):
+                if i >= len(layer.lod):
+                    layer.lod.add()
+                layer.lod[i].near = near
+                layer.lod[i].far = far
+        except (AttributeError, TypeError) as exc:
+            self.warn("%s: could not set the collection LOD levels: %s"
+                      % (coll.xplane.layer.name, exc))
+        return leaf_level
+
+    def _apply_leaf_lod(self, ob, leaf_index, leaf_level):
+        """Mark the object with the LOD level it was drawn under."""
+        level = leaf_level.get(leaf_index)
+        if level is None:
+            return
+        try:
+            ob.xplane.lod[level] = True
+        except (AttributeError, IndexError):
+            pass
+
     def _report_dropped_commands(self, obj8):
-        """Lights, LODs and IF blocks are commands XPlane2Blender cannot take
-        from us - say how many, per file. Silence here would look like success."""
+        """Lights and IF blocks are commands XPlane2Blender cannot take from us
+        - say how many, per file. Silence here would look like success.
+
+        ATTR_LOD is no longer in this list: it becomes the collection's LOD
+        levels (see ``_apply_lods``).
+        """
         counts = {}
         for kind, payload in obj8.events:
             if kind != OC.EV_RAW or not payload:
@@ -973,8 +1044,6 @@ class _Converter(object):
             kw = payload.split()[0]
             if kw.startswith("LIGHT"):
                 key = "LIGHT_* primitives"
-            elif kw == "ATTR_LOD":
-                key = "ATTR_LOD levels"
             elif kw in ("IF", "ENDIF"):
                 key = "IF/ENDIF blocks"
             elif kw.startswith("MAGNET"):
