@@ -1,13 +1,15 @@
-# X-Plane OBJ8 Importer — import X-Plane `.obj` into XPlane2Blender's scene
+# X-Plane OBJ8 Import & Export — `.obj` and `.acf`, in and out of Blender
 
 Import an [X-Plane OBJ8](https://developer.x-plane.com/article/obj8-file-format-specification/)
-`.obj` into a Blender scene that [XPlane2Blender](https://github.com/X-Plane/XPlane2Blender)
-writes back out — geometry, materials, animations, manipulators and lights.
+`.obj` into a Blender scene you can edit — geometry, materials, animations,
+manipulators and lights — and export it back out. Reading and writing are one
+package: the exporter that writes X-Plane's `.obj`
+([XPlane2Blender](https://github.com/X-Plane/XPlane2Blender)) ships inside this
+add-on, so there is nothing else to install and no version to match up.
 
 **File > Import > X-Plane OBJ8 (.obj)** (or just drag the file onto the
 viewport), edit, **File > Export > X-Plane Object (.obj)**. There is no convert
-step to remember and nothing to set up per file: the import builds the
-XPlane2Blender collection itself.
+step to remember and nothing to set up per file.
 
 Drop an aircraft's **`.acf`** instead and every object it attaches is imported in
 one go — the whole aircraft, not one part of it — under one parent collection
@@ -37,21 +39,21 @@ Blender
         │
         │  ②  EDIT — Blender
         ▼
-XPlane2Blender, revised build
+this add-on's bundled exporter
   File > Export > X-Plane Object (.obj)
         │
-        │  ③  EXPORT — with the revised build, linked below
+        │  ③  EXPORT — same package, nothing else installed
         ▼
 X-Plane
 ```
 
-The official XPlane2Blender release cannot do ③ on Blender 5.x: it writes no
-animations at all and reports no error, so the round trip only closes with the
-revised build —
-**[cpuwolf/XPlane2Blender, tag `blender-5x-armature-v1`](https://github.com/cpuwolf/XPlane2Blender/tree/blender-5x-armature-v1)**
-([download](https://github.com/cpuwolf/XPlane2Blender/archive/refs/tags/blender-5x-armature-v1.zip),
-[install steps](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/install.md)) —
-the same build this add-on is tested against.
+The exporter inside this package is XPlane2Blender's **armature build** — 4.5.0
+plus the Blender 5.x fix — and which build it is matters: every official release
+up to 4.5.0 still reads `Action.groups` / `Action.fcurves`, which Blender 5
+removed, and then writes **no animations at all** while the export reports
+*finished*. That is why the exporter is bundled at that exact commit rather than
+left for you to install: upstream authors, licence and the two changes made when
+vendoring it are in [CREDITS.md](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/CREDITS.md).
 
 ![Importing an X-Plane OBJ8 object into Blender](blender_import_demo.gif)
 
@@ -64,37 +66,24 @@ C90B_cockpit.obj                 collection — the exportable XPlane2Blender la
 
 ## Install
 
-Two add-ons, in this order: the **first one exports**, the **second one imports**.
-Install both, then restart Blender once — add-ons load at startup, so the restart
-is what makes either of them take effect. The order is not a technical
-requirement, it is the order of the work: without step 1 there is nothing to
-export to.
+One add-on, one step.
 
-### 1. XPlane2Blender — the export half
+1. **Preferences > Get Extensions > search `X-Plane OBJ8` > Install.**
+   (No platform account yet? Drag the release zip onto Blender instead.)
+2. **Restart Blender.** Add-ons load their modules at startup, so the restart is
+   what makes it take effect.
 
-On Blender 5.x it has to be the **armature build**, not the official release.
-Official releases up to 4.5.0 still read `Action.groups` / `Action.fcurves`,
-which Blender 5 removed, and then export **no animations at all** with no error
-to show for it: the aircraft comes out with every part frozen and the export
-still reports *finished*. The build, the two commands needed to repackage it into
-a zip Blender will actually install, and the version string to check afterwards
-are in [docs/install.md](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/install.md).
+Blender 5.0 or newer. The exporter is inside this package, so nothing else has to
+be installed and nothing can go out of sync.
 
-### 2. X-Plane OBJ8 Importer — this add-on
-
-**Preferences > Get Extensions > search `X-Plane OBJ8` > Install.** (No platform
-account yet? Drag the release zip onto Blender instead.)
-
-Blender 5.0 or newer.
-
-The import warns once when it recognises a XPlane2Blender build that cannot write
-animations, so a half-finished setup says so instead of shipping frozen parts.
+If you already run a standalone XPlane2Blender, this add-on steps aside and uses
+yours — it never registers its bundled copy on top of one that is enabled.
 
 ## What people ask first
 
 | question | answer |
 | --- | --- |
-| Does it export too? | It is an **importer**: the export is XPlane2Blender's. This add-on gets the file *into* its authoring scene correctly — that is the hard part. |
+| Does it export too? | Yes. The exporter (XPlane2Blender's armature build) is bundled, so `File > Export > X-Plane Object (.obj)` works out of the same install. |
 | Do I lose the original file? | No. The file's own text is kept on the collection (custom properties), and everything the conversion cannot express is reported rather than dropped silently. |
 | Will a lever still move? | Yes — one bone per `ANIM_*` block, one keyframe per key the file has, key N on frame N. Drag the time line to watch it. |
 | Are X-Plane's normal maps handled? | Yes, as the **combo map** they are: `R,G` → normal (Z rebuilt), blue → Metallic (metalness mode), alpha → gloss inverted into Roughness. `TEXTURE_MAP` (12.1) included. |
@@ -107,7 +96,8 @@ animations, so a half-finished setup says so instead of shipping frozen parts.
 
 | | |
 | --- | --- |
-| [install](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/install.md) | both add-ons, requirements, checking it worked |
+| [install](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/install.md) | requirements, checking it worked, uninstall |
+| [credits](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/CREDITS.md) | the bundled exporter: authors, licence, what was changed |
 | [import](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/import.md) | the tree, meshes, materials, combo maps, tolerant parsing, where the data lives |
 | [animation](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/animation.md) | armature, keys, `ANIM_show/hide`, the dataref panel, import options |
 | [XPlane2Blender bridge](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/xp2b-bridge.md) | what maps to what, and the two exceptions worth knowing |

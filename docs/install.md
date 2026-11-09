@@ -1,47 +1,11 @@
 # Install
 
-Two pieces: the first one **exports**, the second one **imports**. Install both,
-then restart Blender once (see [Restart Blender](#restart-blender)) — the source
-order below is the order of the work, not a technical requirement.
+One add-on, one step. The exporter is **inside** the package — XPlane2Blender's
+armature build, credited in [CREDITS.md](../CREDITS.md) — so there is no second
+add-on to install and no version to match up. A round trip that used to need two
+matching add-ons is now one install.
 
-## 1. XPlane2Blender
-
-The export side is [XPlane2Blender](https://github.com/X-Plane/XPlane2Blender)'s
-own operator, so it has to be installed first.
-
-> **On Blender 5.x the official XPlane2Blender does not work — use the armature
-> build below, nothing else.** Releases up to 4.5.0 still read `Action.groups`
-> and `Action.fcurves`, which Blender 5 removed, and it fails *silently*: the
-> export finishes and writes no `ANIM_` block at all, so the aircraft ships with
-> every part frozen and no error to explain it. The import in this add-on warns
-> once when it recognises that build.
-
-**Blender 5.x** — there is no extension build of XPlane2Blender yet, so use the
-armature build:
-
-```
-https://github.com/cpuwolf/XPlane2Blender/archive/refs/tags/blender-5x-armature-v1.zip
-```
-
-That URL is a **source archive**, and Blender refuses it as-is — its root is the
-whole repository, so the install stops with `ZIP packaged incorrectly;
-__init__.py should be in a directory`. Repackage the add-on folder inside it,
-then install *that* zip:
-
-```sh
-unzip -q XPlane2Blender-blender-5x-armature-v1.zip
-cd XPlane2Blender-blender-5x-armature-v1
-zip -qr ../io_xplane2blender.zip io_xplane2blender
-```
-
-**Edit > Preferences > Get Extensions > ⌄ > Install from Disk…** →
-`io_xplane2blender.zip`, then enable **XPlane2Blender** in the add-on list. It
-lands as a legacy add-on (`scripts/addons/io_xplane2blender`), which is expected
-while 5.x has no extension build.
-
-## 2. X-Plane OBJ8 Importer (this add-on)
-
-Any of these:
+## Install
 
 | how | what to do |
 | --- | --- |
@@ -51,48 +15,59 @@ Any of these:
 
 Blender 5.0 or newer.
 
+### If you already have XPlane2Blender installed
+
+Nothing to do. This add-on registers its bundled copy only when no standalone
+XPlane2Blender is enabled — an existing one wins, so you keep the exporter you
+know and you will not find two of every panel. The console says which one is in
+use: `xplane_obj: a standalone XPlane2Blender is enabled - using it instead of the
+bundled one`.
+
+Removing the standalone one is optional and safe; the bundled copy takes over on
+the next restart.
+
 ## Restart Blender
 
-Both add-ons load their modules at startup. Installing (or updating) an add-on
-while Blender is open leaves the **old code in memory** — Python edits and
-reinstalls only take effect after a full quit and relaunch.
-
-That is also why the install order does not matter to Blender: install both in
-one session, restart once, and both are live. What the order does decide is what
-you see first — installing this add-on and stopping there gives an import with no
-export target, and the add-on says so instead of failing quietly.
+Add-ons load their modules at startup. Installing (or updating) one while Blender
+is open leaves the **old code in memory** — Python edits and reinstalls only take
+effect after a full quit and relaunch. That is the only reason a restart is
+needed.
 
 ## The exact setup this is tested on
 
-If an import misbehaves, match these versions first: a different XPlane2Blender is
-the most common reason for an import that half-works.
+If something misbehaves, match these versions first.
 
 | | |
 | --- | --- |
 | OS | macOS 26.5 (build 25F71), Apple silicon |
 | Blender | 5.2.2 LTS, built 2026-09-15 01:49:19, hash `d13f752e3b9c` |
-| XPlane2Blender | **4.5.0**, armature build — tag `blender-5x-armature-v1` of `cpuwolf/XPlane2Blender`, commit `bbbf32e` |
-| X-Plane OBJ8 Importer | 0.10.4, installed as the extension `bl_ext.user_default.io_scene_xplane_obj` |
+| X-Plane OBJ8 Import & Export | 0.11.0, installed as the extension `bl_ext.user_default.io_scene_xplane_obj` |
+| Exporter | bundled XPlane2Blender **4.5.0 armature build** — tag `blender-5x-armature-v1` of `cpuwolf/XPlane2Blender`, commit `bbbf32e` |
 | Test data | the aircraft X-Plane 12.4.3-r2 (build 124311, Apple silicon) ships |
 
 Checking your own copies:
 
 * **Blender** — the splash screen, or `blender --version`.
-* **XPlane2Blender** — Preferences > Add-ons, the version next to the name.
-* **This add-on** — Preferences > Get Extensions > Installed (the panel also shows
-  the permissions the add-on asks for).
+* **This add-on** — Preferences > Get Extensions > Installed (the panel also
+  shows the permissions it asks for).
+* **The exporter** — there is no separate version to look up: it ships with the
+  add-on. Whether it registered is visible in the N-panel of the 3D viewport,
+  which shows the X-Plane layer fields it exports from.
 * **X-Plane** — `Log.txt` in the sim's folder, first line.
 
 ## Check it worked
 
-* **File > Import > X-Plane OBJ8 (.obj)** exists.
-* Preferences > Add-ons lists both *XPlane2Blender* and *X-Plane OBJ8 Importer*.
-* Import any `.obj` from an aircraft: if XPlane2Blender is missing you get
-  `XPlane2Blender is not installed/enabled: the file was imported, but there is
-  no exportable collection for its exporter to write`.
+* **File > Import > X-Plane OBJ8 (.obj)** exists, and so does **File > Export >
+  X-Plane Object (.obj)**.
+* Preferences > Get Extensions > Installed lists *X-Plane OBJ8 Import & Export*.
+* Import any `.obj` from an aircraft, then export it: the written file carries
+  its `ANIM_` blocks. If the export finishes and the file has no `ANIM_` line,
+  the exporter did not register — the console has the reason, and the import says
+  `XPlane2Blender is not installed/enabled` rather than pretending all is well.
 
 ## Uninstall
 
-Preferences > Add-ons: remove both. Nothing else is written outside the
+Preferences > Get Extensions: remove it. Nothing else is written outside the
 `.blend` files you make — the add-on touches no network, no clipboard and no
-camera, and only reads and writes the `.obj` files you open.
+camera, and it only reads the `.obj` / `.acf` files you open and writes the
+`.obj` files you export.

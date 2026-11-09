@@ -54,9 +54,37 @@ blender -b --factory-startup --python scripts/import_warnings.py -- <file.obj>  
 blender -b --factory-startup --python scripts/material_probe.py -- <file.obj>   # each material's wiring, chain by chain
 ```
 
-`--factory-startup` loads no add-ons, so a test that needs XPlane2Blender must
-enable it itself (`bpy.ops.preferences.addon_enable(module="io_xplane2blender")`)
-or it will report "the file was imported, but there is no exportable collection".
+`--factory-startup` loads no add-ons. The exporter ships inside this package as
+`xplane2blender/`, but it is registered by this add-on's own `register()`, so a
+script that loads the repository by path (the `verify/` and `scripts/` probes do)
+gets the export path for free; one that only enables the *standalone* legacy
+add-on is testing that copy instead, and without either it reports "the file was
+imported, but there is no exportable collection".
+
+## The bundled exporter (`xplane2blender/`)
+
+The export half is XPlane2Blender's armature build, carried verbatim so that one
+install imports and exports — a platform rule, not a preference: ToS 5.2/5.3
+forbid a feature that depends on another extension, "even if it is optional".
+
+Rules for touching it:
+
+* **Only three kinds of change are allowed**, and they are the three already
+  made: absolute imports became relative, the six files that walked
+  `io_xplane2blender.<attr>` name the module instead, and `tests/` keeps only the
+  modules the runtime imports. Everything else is upstream at commit `bbbf32e`
+  of `cpuwolf/XPlane2Blender` — so a bug here is reported upstream, not patched
+  in place, unless it blocks the export on Blender 5.x.
+* **No `sys.modules` alias for the package name.** Mapping `io_xplane2blender`
+  onto `xplane2blender` gives one file two module objects when a standalone copy
+  is also enabled, i.e. two counters, two updaters and two registration passes.
+* **`xplane2blender/tests/` has to stay in the package.** `xplane_file.py` and
+  `xplane_wiper_gradient.py` import `test_creation_helpers` at runtime; excluding
+  it produces a zip `extension validate` accepts and that fails to register with
+  `No module named ...xplane2blender.tests`.
+* **`verify/bundle_smoke.py` is the gate**, not `extension validate`: it unzips
+  the artifact, registers it, imports `verify/fixtures/nested.obj` and asserts
+  the export carries `ANIM_` lines (25 of them). It runs in CI on every tag.
 
 ## The pinned test environment
 
