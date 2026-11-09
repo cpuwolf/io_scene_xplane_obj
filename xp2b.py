@@ -1842,6 +1842,14 @@ class _Converter(object):
                 clone.name = mat.name + "_" + tag
                 for name, value in pairs:
                     setattr(clone.xplane, name, value)
+                if any(name == "solid_camera" and value for name, value in pairs):
+                    # ATTR_solid_camera marks a collision proxy: the sim uses it
+                    # for camera hits and never draws it, so it should not sit
+                    # in the way in the viewport either.  Setting the alpha to 0
+                    # leaves the geometry selectable; the export writes
+                    # ATTR_solid_camera back unchanged, because that lives on
+                    # xplane.solid_camera and not in the material graph.
+                    _make_transparent(clone)
                 self.material_cache[slot_key] = clone
             slot.material = clone
 
