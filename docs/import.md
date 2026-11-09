@@ -53,12 +53,6 @@ _obja/0/_v10_att_file_stl ../Cessna_172SP_cockpit.obj
   it does not stop the import.
 * The `.acf` is **only read**. Laminar asks that add-ons not write the format,
   because it changes between sim versions, and this importer has no reason to.
-* **The scene camera is moved to the cockpit viewpoint first**, because X-Plane
-  builds every aircraft around the same axes: location `(-4.4895, 5.0562, 2.4779)`
-  m, rotation `(76.327°, 0, -149.23°)` XYZ Euler, scale 1. The active camera is
-  used, else the first camera in the scene (made active); a scene without a camera
-  gets none created. Untick *Place the camera* in the import dialog to leave it
-  alone — a dropped `.acf` always places it.
 * **It takes a while (13 to 113 objects), so it reports where it is**: the status
   bar reads `X-Plane .acf  12/42  <file>` with the progress bar moving, one object
   per tick, and **ESC** stops between two files — the objects that already landed

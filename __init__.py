@@ -61,7 +61,6 @@ an export but cannot be created here.  Use XPlane2Blender when you need to
 author manipulators, or animations that are more than a hinge.
 """
 
-import math
 import os
 import glob
 import json
@@ -269,40 +268,6 @@ class IMPORT_OT_xplane_obj(bpy.types.Operator, ImportHelper):
         return {'FINISHED'}
 
 
-# Where the .acf import parks the scene camera.  X-Plane builds every aircraft
-# around the same axes, so one transform frames any of them from the cockpit -
-# these are the numbers the user reads off a placed camera (Location m, Rotation
-# XYZ Euler degrees, scale 1).
-CAMERA_LOCATION = (-4.4895, 5.0562, 2.4779)
-CAMERA_ROTATION_DEG = (76.327, 0.0, -149.23)
-
-
-def _place_camera(context):
-    """Put the scene's camera on the X-Plane viewpoint; return it (or None).
-
-    Uses the active camera, and falls back to the first camera in the scene (made
-    active) when none is set.  No camera in the scene means nothing to do - this
-    never creates one, so an aircraft imported into an empty scene still behaves
-    exactly as before.
-    """
-    scene = context.scene
-    camera = scene.camera
-    if camera is None or camera.type != 'CAMERA':
-        camera = next((ob for ob in scene.objects if ob.type == 'CAMERA'), None)
-        if camera is None:
-            return None
-        scene.camera = camera
-    camera.location = CAMERA_LOCATION
-    # a camera left in Quaternion mode would ignore rotation_euler entirely
-    camera.rotation_mode = 'XYZ'
-    camera.rotation_euler = tuple(math.radians(deg)
-                                  for deg in CAMERA_ROTATION_DEG)
-    # the transform in the screenshot includes it; a scaled camera would skew the
-    # framing while the location and rotation still read correct
-    camera.scale = (1.0, 1.0, 1.0)
-    return camera
-
-
 @_add
 class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
     """Import every OBJ8 object an X-Plane aircraft (.acf) attaches
@@ -334,13 +299,6 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
         name="File Path", type=bpy.types.OperatorFileListElement,
         options={'SKIP_SAVE', 'HIDDEN'})
 
-    place_camera: BoolProperty(
-        name="Place the camera",
-        description="Move the scene's camera to the X-Plane cockpit viewpoint "
-                    "before importing; X-Plane builds every aircraft around "
-                    "the same axes, so one transform frames any of them",
-        default=True)
-
     def invoke(self, context, event):
         if self.properties.is_property_set("filepath") or len(self.files):
             return self.execute(context)
@@ -365,11 +323,6 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
             self.report({'ERROR'}, "not a file: %s" % (self.filepath or
                                                        "no .acf selected"))
             return {'CANCELLED'}
-
-        camera = _place_camera(context) if self.place_camera else None
-        if camera is not None:
-            self.report({'INFO'}, "camera %s placed at the X-Plane viewpoint"
-                        % camera.name)
 
         paths = []
         seen = set()

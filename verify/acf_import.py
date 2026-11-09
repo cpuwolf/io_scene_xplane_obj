@@ -19,7 +19,6 @@ loop, so the modal handler (status text, progress bar, ESC) only runs in a GUI
 session - see docs/development.md.
 """
 import importlib.util
-import math
 import os
 import sys
 import time
@@ -62,15 +61,6 @@ print("handlers: %s" % [(c.bl_idname, c.bl_file_extensions)
 for ob in list(bpy.data.objects):
     bpy.data.objects.remove(ob, do_unlink=True)
 
-# a camera that is NOT where the import should leave it, so "it moved" means
-# something; the numbers below are the X-Plane viewpoint the operator carries
-EXPECT_LOCATION = (-4.4895, 5.0562, 2.4779)
-EXPECT_ROTATION_DEG = (76.327, 0.0, -149.23)
-camera = bpy.data.objects.new("ProbeCamera", bpy.data.cameras.new("ProbeCamera"))
-bpy.context.scene.collection.objects.link(camera)
-camera.location = (1.0, 2.0, 3.0)
-bpy.context.scene.camera = camera
-
 t0 = time.time()
 try:
     if len(ACFS) > 1:
@@ -105,25 +95,13 @@ for coll in exportable:
           flush=True)
 print("meshes=%d armatures=%d" % (len(meshes), len(arms)), flush=True)
 
-camera_location = tuple(round(v, 4) for v in camera.location)
-camera_rotation = tuple(round(math.degrees(a), 3) for a in camera.rotation_euler)
-print("camera: loc=%r rot=%r mode=%s scale=%r"
-      % (camera_location, camera_rotation, camera.rotation_mode,
-         tuple(round(v, 3) for v in camera.scale)), flush=True)
-camera_ok = (camera_location == EXPECT_LOCATION
-             and camera_rotation == EXPECT_ROTATION_DEG
-             and camera.rotation_mode == 'XYZ'
-             and tuple(camera.scale) == (1.0, 1.0, 1.0))
-print("camera check: %s" % ("PASS" if camera_ok else "FAIL"), flush=True)
-
 if error:
     print("error: %s" % error, flush=True)
 
-ok = camera_ok
 if WANT_XP2B:
-    ok = ok and result == {'FINISHED'} and bool(meshes) and bool(exportable)
+    ok = (result == {'FINISHED'} and meshes and exportable)
 else:
     # without XP2B the import still has to land the geometry and say why there
     # is no exportable collection, instead of failing silently
-    ok = ok and bool(meshes) and "XPlane2Blender" in error
+    ok = bool(meshes) and "XPlane2Blender" in error
 print("\nRESULT: %s" % ("PASS" if ok else "FAIL"), flush=True)
