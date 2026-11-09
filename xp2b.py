@@ -103,6 +103,37 @@ def bone_support():
 # small builders
 # ---------------------------------------------------------------------------
 
+def _make_transparent(mat):
+    """Drive a material to alpha 0, in the viewport, Solid mode and renders.
+
+    The alpha link has to be cut first: a texture's alpha channel wired into
+    the BSDF wins over the socket value, so setting 0 alone would leave the
+    object exactly as visible as it was.
+    """
+    if mat is None or not mat.use_nodes or not mat.node_tree:
+        return
+    nt = mat.node_tree
+    bsdf = next((n for n in nt.nodes
+                 if n.bl_idname == 'ShaderNodeBsdfPrincipled'), None)
+    if bsdf is None:
+        return
+    for link in list(nt.links):
+        if link.to_node is bsdf and link.to_socket.name == 'Alpha':
+            nt.links.remove(link)
+    bsdf.inputs['Alpha'].default_value = 0.0
+    try:
+        mat.surface_render_method = 'BLENDED'
+    except (AttributeError, TypeError):
+        try:
+            mat.blend_method = 'BLEND'
+        except (AttributeError, TypeError):
+            pass
+    try:
+        mat.diffuse_color = (0.0, 0.0, 0.0, 0.0)
+    except (AttributeError, TypeError):
+        pass
+
+
 def _new_collection(name):
     coll = bpy.data.collections.new(name)
     return coll
@@ -931,8 +962,17 @@ class _Converter(object):
 
     # -- per-part helpers -------------------------------------------------
     def _no_draw_material(self, ob, base):
-        """ATTR_draw_disable -> a material copy with XP2B draw = False."""
+        """ATTR_draw_disable -> a material copy with XP2B draw = False.
+
+        X-Plane never draws these objects (collision boxes, shadow casters,
+        invisible walls), so the copy is made fully transparent as well.  The
+        checkbox in XPlane2Blender's panel is what keeps them out of the
+        *exported* file; alpha 0 is what keeps the solid block out of the
+        viewport and any render of the scene.
+        """
         self._material_set(ob, [("draw", False)], "nodraw")
+        for slot in ob.material_slots:
+            _make_transparent(slot.material)
 
     def _apply_light_level(self, ob, state):
         """ATTR_light_level -> the *object's* X-Plane light level.

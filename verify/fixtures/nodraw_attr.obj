@@ -1,0 +1,23 @@
+I
+800
+OBJ
+
+# Fixture: the material's X-Plane "Draw objects with this material" switch.
+# Two quads share one texture; the second one sits behind ATTR_draw_disable,
+# so the conversion has to give it a *_nodraw material copy with draw = False
+# (and, for Blender, alpha 0) while the first quad stays exactly as it was.
+TEXTURE	mini.png
+POINT_COUNTS	8 0 0 4
+
+VT	0	0	0	0	1	0	0	0
+VT	1	0	0	0	1	0	1	0
+VT	1	0	1	0	1	0	1	1
+VT	0	0	1	0	1	0	0	1
+VT	2	0	0	0	1	0	0	0
+VT	3	0	0	0	1	0	1	0
+VT	3	0	1	0	1	0	1	1
+VT	2	0	1	0	1	0	0	1
+IDX10	0 1 2 0 2 3 4 5 6 4 6 7
+TRIS	0	6
+ATTR_draw_disable
+TRIS	6	6
