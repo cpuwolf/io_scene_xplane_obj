@@ -40,9 +40,20 @@ for coll in list(bpy.data.collections):
 print("source:", SRC)
 res = bpy.ops.import_scene.xplane_obj(filepath=SRC)
 print("import:", res)
+# The import converts in place and deletes the header Empty, so the file's own
+# tables live on the exportable collection now (`xp8_events` among them).
 header = bpy.context.view_layer.objects.active
-print("header:", header.name, "parts:", len(IMP.xpmesh.parts(header)),
-      "events:", len(__import__("json").loads(header[IMP.xpmesh.PROP_EVENTS])))
+coll0 = next((c for c in bpy.data.collections
+              if getattr(getattr(c, "xplane", None),
+                         "is_exportable_collection", False)), None)
+if coll0 is not None:
+    events = coll0.get(IMP.xpmesh.PROP_EVENTS)
+    print("collection:", coll0.name,
+          "objects:", len(coll0.all_objects),
+          "meshes:", len([o for o in coll0.all_objects if o.type == 'MESH']),
+          "events:", len(__import__("json").loads(events)) if events else 0)
+else:
+    print("header:", header.name if header else None, "no exportable collection")
 
 res = (bpy.ops.object.xp8_to_xp2b()
        if not [c for c in bpy.data.collections if c.xplane.is_exportable_collection]

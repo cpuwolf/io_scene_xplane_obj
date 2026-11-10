@@ -59,6 +59,7 @@ as materials, animations as armatures — and an exporter on the other side.
 | cockpit panels, devices, lit regions | X-Plane layer and material settings — editable, and written back |
 | manipulators (drag, rotate, push, toggle, axis, detents) | the object's manipulator settings, same numbers |
 | light levels, `ATTR_draw_disable`, culling, LODs, `LIGHT_PARAM` | the fields X-Plane reads, plus real light objects |
+| particle emitters (`EMITTER` + `PARTICLE_SYSTEM`) | one Empty per emitter, pointing the way it does in the sim |
 | the file's own text | kept on the collection, so nothing is guessed twice |
 
 And the export side is in the same package — no second add-on, no version to match.

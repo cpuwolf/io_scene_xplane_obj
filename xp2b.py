@@ -22,13 +22,17 @@ What survives the conversion
   *Panel Texture Mode*, ``COCKPIT_REGION`` as the layer's region table
 * manipulators (the common signatures: command family, toggle, push, radio,
   delta/wrap, drag axis) as ``object.xplane.manip``
+* ``LIGHT_PARAM`` / ``LIGHT_NAMED`` as light objects, ``ATTR_LOD`` as the
+  collection's LOD levels
+* ``PARTICLE_SYSTEM`` as the layer's *Particle System File*, and every
+  ``EMITTER`` as an Empty of XPlane2Blender's *Particle Emitter* type
 * the geometry, with its materials and UVs, as the importer already built it
 
-What does NOT: ``LIGHT_*`` primitives, ``ATTR_LOD``, ``IF/ENDIF``, ``MAGNET``,
-``ATTR_hard``, unknown ATTR categories, and drag-rotate/detent manipulators.
-XPlane2Blender cannot be handed those as commands, so they are dropped and
-counted in a warning per file - the conversion is one-way and lossy by design,
-which is exactly why the source scene is left untouched.
+What does NOT: ``IF``/``ENDIF`` blocks, ``ATTR_*`` categories no field of
+XPlane2Blender's covers, and the manipulators it refuses (a drag-rotate whose
+pivot bone is missing).  XPlane2Blender cannot be handed those as commands, so
+they are dropped and counted in a warning per file - the conversion is one-way
+and lossy by design, which is exactly why the source scene is left untouched.
 
 One structural note: a block that carries both a translation table and a
 rotation table becomes two nested Empty levels, because each dataref gets its
@@ -852,6 +856,10 @@ class _Converter(object):
         coll.xplane.layer.name = base
         coll.xplane.layer.export_type = "aircraft"
         self._apply_texture_options(obj8, coll)
+        # PARTICLE_SYSTEM is the layer's *Particle System File*: XP2B writes the
+        # record from there, and it treats an emitter without one as an export
+        # error, so the global has to land before the emitters are built
+        self._apply_particle_system(obj8, coll)
         # ATTR_LOD lives on the collection (XPlane2Blender's model), and every
         # leaf is tagged with the level it was drawn under
         leaf_level = self._apply_lods(obj8, coll)
@@ -895,6 +903,9 @@ class _Converter(object):
         # the rest of the file: a light inside an ANIM block has to ride that
         # block's bone, exactly like the geometry
         lights_made = self._build_lights(obj8, coll, anchors)
+        # emitters ride their block's bone exactly like lights do, which is why
+        # they are built here and not with the rest of the file
+        emitters_made = self._build_emitters(obj8, coll, anchors)
 
         self._report_dropped_commands(obj8)
 
@@ -962,7 +973,7 @@ class _Converter(object):
 
         self._apply_magnets(obj8, leaf_objs)
 
-        if not made and not lights_made:
+        if not made and not lights_made and not emitters_made:
             self.warn("%s: no geometry was moved" % base)
 
         if self.specs:
@@ -1009,6 +1020,20 @@ class _Converter(object):
         layer.texture_map_gloss = maps.get("gloss", "")
         layer.normal_metalness = obj8.global_value("NORMAL_METALNESS") is not None
         layer.blend_glass = obj8.global_value("BLEND_GLASS") is not None
+
+    def _apply_particle_system(self, obj8, coll):
+        """PARTICLE_SYSTEM -> the layer's *Particle System File*.
+
+        XPlane2Blender writes the record from the layer field, and an EMITTER
+        without one cancels the export, so the two halves belong together.  The
+        path is kept exactly as the file spells it: a .pss resolves relative to
+        the .obj, which is the directory the export writes into (the A330 says
+        ``particles/aircraft_system.pss``).
+        """
+        words = obj8.global_value("PARTICLE_SYSTEM")
+        if not words:
+            return
+        coll.xplane.layer.particle_system_file = words[0]
 
     def _apply_lods(self, obj8, coll):
         """ATTR_LOD -> the collection's LOD levels; returns {leaf: level index}.
@@ -1175,6 +1200,138 @@ class _Converter(object):
         if skipped:
             self.warn("%s: %d light line(s) could not be converted"
                       % (coll.xplane.layer.name, skipped))
+        return made
+
+    def _walk_raw(self, obj8, anchors):
+        """Yield ``(line, anchor)`` for every raw command in the file.
+
+        ``anchor`` is the innermost enclosing ANIM block's anchor - the bone the
+        command has to ride - or None for a command outside every block.  Same
+        stack walk ``_build_lights`` does inline: an emitter that lands outside
+        its block exports without the transform that drives it, so a wingtip
+        vortex tied to ``wing_tip_deflection_deg`` would sit still.
+        """
+        by_begin = {}
+        for blk in getattr(self.anim, "blocks", None) or []:
+            if getattr(blk, "begin_ev", None) is not None:
+                by_begin[blk.begin_ev] = blk
+        stack = []
+        for ev_index, (kind, payload) in enumerate(obj8.events):
+            if kind == OC.EV_ANIM_BEGIN:
+                stack.append(by_begin.get(ev_index))
+                continue
+            if kind == OC.EV_ANIM_END:
+                if stack:
+                    stack.pop()
+                continue
+            if kind != OC.EV_RAW or not payload:
+                continue
+            anchor = None
+            if anchors:
+                for blk in reversed(stack):
+                    if blk is not None and blk.index in anchors:
+                        anchor = anchors[blk.index]
+                        break
+            yield payload, anchor
+
+    def _make_emitter(self, words, coll):
+        """One EMITTER line -> the Empty XPlane2Blender writes it back from.
+
+        ``EMITTER <name> <x> <y> <z> <psi> <the> <phi> [index]`` - a position,
+        three Euler angles in degrees, and the entry the emitter takes when one
+        .pss particle is attached several times (the F-14 mirrors every exhaust
+        emitter at index 0 and 1).
+
+        The Empty carries XPlane2Blender's own *Particle Emitter* settings
+        (``special_empty_props``), which is what makes the name, the index and
+        the angles editable in the N-panel and what it exports the line from -
+        a plain Empty exports nothing, and a custom attribute would be both
+        unreadable and ignored, since XP2B builds the whole line itself.
+        """
+        if len(words) < 8:
+            return None
+        name = words[1]
+        try:
+            pos = (float(words[2]), float(words[3]), float(words[4]))
+            psi, the, phi = (float(words[5]), float(words[6]), float(words[7]))
+        except ValueError:
+            return None
+        ob = bpy.data.objects.new(name, None)
+        ob.empty_display_type = 'PLAIN_AXES'
+        ob.empty_display_size = 0.15
+        ob.rotation_mode = 'XYZ'
+        ob.location = _xp_to_bl(pos)
+        # XP2B writes `EMITTER name x y z -eulerZ eulerX eulerY`
+        # (xplane_empty.py:87), so the inverse is exactly that: psi/the/phi
+        # become -Z/X/Y.  Anything else agrees at the numbers and disagrees in
+        # the sim, which is the kind of error that only shows up as "the smoke
+        # comes out sideways".
+        ob.rotation_euler = (math.radians(the), math.radians(phi),
+                             math.radians(-psi))
+        props = ob.xplane.special_empty_props
+        props.special_type = "emitter_particle"
+        props.emitter_props.name = name
+        if len(words) > 8:
+            try:
+                index = int(float(words[8]))
+            except ValueError:
+                index = -1
+            if index >= 0:
+                props.emitter_props.index_enabled = True
+                props.emitter_props.index = index
+        coll.objects.link(ob)
+        return ob
+
+    def _build_emitters(self, obj8, coll, anchors=None):
+        """Every EMITTER line -> an Empty; returns how many were made.
+
+        Nothing is made when XPlane2Blender would refuse the file: an emitter
+        with no .pss on the layer, a .pss path that is not one, or a scene
+        version older than 1130 (the release emitters arrived in) all cancel or
+        silently skip the export, and a file that stopped exporting is worse
+        than a list of emitters that was reported instead.
+        """
+        lines = [(line, anchor) for line, anchor in self._walk_raw(obj8, anchors)
+                 if line.split()[0] == "EMITTER"]
+        if not lines:
+            return 0
+        layer = coll.xplane.layer
+        pss = (getattr(layer, "particle_system_file", "") or "").strip()
+        if not pss:
+            self.warn("%s: %d EMITTER line(s) are not converted - there is no "
+                      "PARTICLE_SYSTEM record, and XPlane2Blender cancels the "
+                      "whole export over an emitter without a .pss file. Set "
+                      "Layer > Particles > Particle System File by hand, then "
+                      "add the emitters as Empties of type Particle Emitter."
+                      % (layer.name, len(lines)))
+            return 0
+        if not pss.endswith(".pss"):
+            self.warn("%s: %d EMITTER line(s) are not converted - the layer's "
+                      "particle file %r is not a .pss, which XPlane2Blender "
+                      "treats as an export error" % (layer.name, len(lines), pss))
+            return 0
+        try:
+            version = int(self.scene.xplane.version)
+        except (AttributeError, TypeError, ValueError):
+            version = 0
+        if version < 1130:
+            self.warn("%s: %d EMITTER line(s) are not converted - the scene's "
+                      "X-Plane version is %s and XPlane2Blender writes "
+                      "PARTICLE_SYSTEM and EMITTER from 1130 up"
+                      % (layer.name, len(lines), self.scene.xplane.version))
+            return 0
+        made = 0
+        for line, anchor in lines:
+            ob = self._make_emitter(line.split(), coll)
+            if ob is None:
+                self.warn("%s: EMITTER line is not converted, it is not a name "
+                          "and six numbers: %s" % (layer.name, line))
+                continue
+            if anchor is not None:
+                anchor.attach(ob)
+            elif getattr(self, "root", None) is not None:
+                _Anchor(obj=self.root).attach(ob)
+            made += 1
         return made
 
     def _report_dropped_commands(self, obj8):

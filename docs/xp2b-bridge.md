@@ -27,6 +27,10 @@ lights, LODs) is what it is good at — nothing here writes a `.obj` itself.
 | `TEXTURE_MAP normal` / `material_gloss` / `gloss` | the layer's 12.0+ Normal / Material-Gloss / Gloss fields |
 | `NORMAL_METALNESS`, `BLEND_GLASS` | the layer's *Normal Metalness* and *Blend Glass* |
 | `ATTR_shiny_rat` | the material's specularity |
+| `LIGHT_PARAM` / `LIGHT_NAMED` | a light object (position from the object, the parameter text verbatim) |
+| `ATTR_LOD` | the layer's LOD levels, plus the `lod[i]` flag on each batch |
+| `PARTICLE_SYSTEM` | the **layer's** *Particle System File* |
+| `EMITTER` | an Empty with XP2B's *Particle Emitter* type (name, array index, position and Euler angles) |
 
 Two of those are worth the extra sentence they get:
 
@@ -50,13 +54,30 @@ Two of those are worth the extra sentence they get:
 Material clones are shared: batches that ask for the same state combination get
 one clone, not one each.
 
+## Particles
+
+A particle file is two records, and both have to land or neither exports:
+
+* `PARTICLE_SYSTEM <file.pss>` becomes the layer's *Particle System File*, the
+  path spelled exactly as the file spells it (`particles/aircraft_system.pss` is
+  relative to the `.obj`, which is where the export writes);
+* every `EMITTER` becomes an Empty whose *Particle Emitter* settings hold the
+  emitter's name and array index, and whose transform holds the position and the
+  three Euler angles. Emitters inside an `ANIM` block hang off that block's bone
+  exactly like the geometry, so the line comes back out inside the same block and
+  keeps following the animation that drives it.
+
+XPlane2Blender refuses an emitter while no `.pss` is set (it cancels the whole
+export), so a file with `EMITTER` but no `PARTICLE_SYSTEM` is reported instead of
+half-converted. The `.pss` itself is not read or edited here — only referenced.
+
 ## What cannot be carried
 
-`LIGHT_*` primitives, `ATTR_LOD`, `IF`/`ENDIF` and `MAGNET` have no XP2B command
-form, so they are dropped with a warning per file (also stored as
-`xp2b_convert_warnings` on the collection). A file that mixes panel modes cannot
-be reproduced exactly either: the layer holds one mode, so the first wins and the
-mixture is reported.
+`IF`/`ENDIF` blocks have no XP2B command form, so they are dropped with a warning
+per file (also stored as `xp2b_convert_warnings` on the collection), as is any
+`ATTR_*` category no field of XPlane2Blender's covers. A file that mixes panel
+modes cannot be reproduced exactly either: the layer holds one mode, so the first
+wins and the mixture is reported.
 
 ## Accuracy
 

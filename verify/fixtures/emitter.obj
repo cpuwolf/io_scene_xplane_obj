@@ -1,0 +1,29 @@
+I
+800
+OBJ
+
+# Fixture for the emitter tests: one quad plus the two positions an EMITTER can
+# take in a file, which are the two code paths.
+#   * top_level   at the top level: no ANIM block, so nothing may wrap it
+#   * in_block    inside a keyed ANIM block: the line has to ride that block's
+#                 bone, or the particles stop following the animation
+# in_block also carries no index, which is the "assumed to be 0" spelling.
+TEXTURE	mini.png
+PARTICLE_SYSTEM	mini.pss
+POINT_COUNTS	4 0 0 6
+
+VT	0	0	0	0	1	0	0	0
+VT	1	0	0	0	1	0	1	0
+VT	1	0	1	0	1	0	1	1
+VT	0	0	1	0	1	0	0	1
+IDX10	0 1 2 0 2 3
+
+EMITTER	top_level	1	2	3	-4.5	167.5	4.97	1
+ANIM_begin
+	ANIM_rotate_begin	0	1	0	sim/flightmodel2/gear/deploy_ratio
+	ANIM_rotate_key	0	0
+	ANIM_rotate_key	1	90
+	ANIM_rotate_end
+	TRIS	0	6
+	EMITTER	in_block	0.5	0.25	-1.5	112.77	0.2587	-6.09
+ANIM_end

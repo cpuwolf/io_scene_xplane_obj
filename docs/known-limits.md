@@ -1,8 +1,14 @@
 # Known limits
 
-* `LINES` are imported read-only and exported from their stored indices; light
-  primitives (`LIGHT_PARAM`, `LIGHT_NAMED`) are preserved as raw commands in the
-  file text and cannot be handed to XPlane2Blender.
+* `LINES` are imported read-only and exported from their stored indices.
+* Particles are referenced, not authored: `PARTICLE_SYSTEM` and `EMITTER` become
+  the layer's particle file and one Empty per emitter, but the `.pss` itself is
+  neither read nor written — the particles' own shape, size and lifetime curves
+  stay in that file and are edited with Laminar's particle editor.
+* An `EMITTER` is only converted where XPlane2Blender can write one: the layer
+  needs a `.pss`, and the scene's X-Plane version must be 1130 or later (Scene >
+  X-Plane > Version). Otherwise the emitters are reported and left out rather
+  than handed over and cancelling the export.
 * One `.obj` has one texture set, so an object with several materials exports
   with the first material's textures.
 * Blender stores custom normals as int16 per axis, so regenerated normals can
