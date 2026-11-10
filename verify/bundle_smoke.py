@@ -133,6 +133,18 @@ try:
         fail("a mesh with no material crashed the exporter: %r" % exc)
     print("a material-less mesh is reported, not crashed", flush=True)
 
+    # Installing a version from disk is unregister + register in one process
+    # (Blender does not unload the module, and XPlane2Blender's property groups
+    # survive its own unregister), so the exporter has to come back without a
+    # restart. It did not: the guard read the leftover properties, decided an
+    # exporter was already there, and Export stayed missing until Blender quit.
+    mod.unregister()
+    mod.register()
+    if not hasattr(bpy.types, "EXPORT_OT_xplane_obj"):
+        fail("re-registering the add-on left no exporter - a version installed "
+             "from disk would need a Blender restart before Export returns")
+    print("re-registered: the exporter comes back without a restart", flush=True)
+
     mod.unregister()
     print("RESULT: PASS", flush=True)
 finally:

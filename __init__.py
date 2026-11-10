@@ -949,13 +949,19 @@ def _standalone_xp2b_enabled():
         return False
 
 
-def _xp2b_props_present():
-    """True when something has already registered XPlane2Blender's properties."""
-    try:
-        return ("xplane" in bpy.types.Object.bl_rna.properties
-                and "xplane" in bpy.types.Collection.bl_rna.properties)
-    except AttributeError:                                # headless oddity
-        return False
+def _xp2b_registered():
+    """True when XPlane2Blender's classes are actually registered right now.
+
+    Not the `xplane` properties: they survive XPlane2Blender's own unregister and
+    they survive the extension being disabled, which is the state a version
+    install from disk passes through (disable, then enable, one process). Reading
+    them said "an exporter is already here" while its operators were gone, so the
+    bundle stepped aside and Export stayed missing until Blender restarted.
+    """
+    # the RNA name comes from bl_idname, not from the class name:
+    # the Python class is EXPORT_OT_ExportXPlane, bpy.types holds
+    # EXPORT_OT_xplane_obj
+    return hasattr(bpy.types, "EXPORT_OT_xplane_obj")
 
 
 def _register_xp2b_now():
@@ -981,7 +987,7 @@ def _register_xp2b_after_startup():
     properties and the export dies on `Object.xplane` with no word about the
     missing add-on. So a listed-but-absent standalone means the bundle takes over.
     """
-    if not _own_xp2b and not _xp2b_props_present():
+    if not _own_xp2b and not _xp2b_registered():
         print("xplane_obj: the standalone XPlane2Blender is enabled but did not "
               "load - registering the bundled one", flush=True)
         _register_xp2b_now()
@@ -989,13 +995,21 @@ def _register_xp2b_after_startup():
 
 
 def _register_xp2b():
-    """Register an exporter: the bundled one, unless another already provides it."""
-    if _own_xp2b:
-        return True
-    if _xp2b_props_present():
-        print("xplane_obj: another XPlane2Blender is registered - using it "
-              "instead of the bundled one", flush=True)
-        return False
+    """Register an exporter: the bundled one, unless another already provides it.
+
+    What decides is whether the properties exist, never the `_own_xp2b` flag:
+    disabling the extension in a running session unregisters both add-ons but
+    does not unload this module, so the flag would survive and claim an exporter
+    that is no longer registered. That is exactly why installing a new version
+    from disk (disable + enable, same process) used to need a Blender restart
+    before Export came back.
+    """
+    global _own_xp2b
+    if _xp2b_registered():
+        if not _own_xp2b:
+            print("xplane_obj: another XPlane2Blender is registered - using it "
+                  "instead of the bundled one", flush=True)
+        return _own_xp2b
     if _standalone_xp2b_enabled() and not bpy.app.background:
         # it may still be loading; `-b` has loaded every add-on before scripts
         # run, so there it is already decided
@@ -1016,12 +1030,14 @@ def register():
 
 
 def unregister():
+    global _own_xp2b
     bpy.types.TOPBAR_MT_file_import.remove(_menu_import)
     for cls in reversed(CLASSES):
         bpy.utils.unregister_class(cls)
     if _own_xp2b:
         from . import xplane2blender
         xplane2blender.unregister()
+        _own_xp2b = False
 
 
 if __name__ == "__main__":
