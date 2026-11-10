@@ -6,7 +6,7 @@ schema_version = "1.0.0"
 # extensions/<repo>/io_scene_xplane_obj/.
 
 id = "io_scene_xplane_obj"
-version = "0.12.0"
+version = "0.12.1"
 name = "X-Plane OBJ8 Import and Export"
 tagline = "Import and export X-Plane .obj and .acf in one install"
 maintainer = "Wei Shuai"
@@ -30,6 +30,18 @@ copyright = [
   "2010-2026 Maya F. Eroğlu",
 ]
 
+# The export half ships as a Python wheel, and this key is what makes Blender
+# unpack it.  It is a TOP-LEVEL key - `[build] wheels` is silently ignored: the
+# file still ends up in the zip (paths cover the whole directory) but the runtime
+# never installs it and `import io_xplane2blender` fails a second later.
+#
+# bl_extensions installs declared wheels into
+# `extensions/.local/lib/pythonX.Y/site-packages` and puts that first in
+# sys.path, so the exporter keeps its upstream top-level name and not one line of
+# it is rewritten.  Regenerate with `python3 scripts/build_wheel.py` (gitignored:
+# build artifact, 46 files); CI runs it before `extension build`.
+wheels = ["./wheels/io_xplane2blender-4.5.0.post1-py3-none-any.whl"]
+
 # The add-on reads the .obj / .acf files the user picks and writes the .obj files
 # the exporter saves - the extension platform expects the `files` permission for
 # any add-on that touches the file system outside its own directory.
@@ -40,7 +52,8 @@ files = "Read X-Plane .obj/.acf, write the .obj files you export"
 # dev scripts, the dev symlink helper and the CI config stay in the repository.
 # (`/scripts/` is excluded on purpose: those probes put this repository on
 # sys.path and import modules into the global namespace, which the extension
-# guidelines forbid inside a package - they are developer tools, not add-on code.)
+# guidelines forbid inside a package - they are developer tools, not add-on code.
+# `/wheels/` is NOT excluded: the wheel is what `wheels = ...` above promises.)
 [build]
 paths_exclude_pattern = [
   "__pycache__/",
@@ -48,16 +61,12 @@ paths_exclude_pattern = [
   "/.github/",
   "/.gitignore",
   "/.gitmodules",
-  "/vendor/",     # the exporter's submodule: scripts/vendor_bundle.py
-                # copies it into xplane2blender/ at build time, and that
-                # generated directory is what ships
+  "/vendor/",     # the exporter's submodule: scripts/build_wheel.py packs it
+                  # into wheels/*.whl, and the wheel is what ships
   "/.DS_Store",
   "/dist/",
   "/verify/",
   "/scripts/",
-  # xplane2blender/tests/ IS packaged: xplane_file.py and
-                # xplane_wiper_gradient.py import test_creation_helpers at
-                # runtime, so excluding it makes the export fail to register.
   "/docs/",     # the README links to these on GitHub; the add-on does not read
                 # them, and the extension platform renders only the README
   "/dev-link.sh",

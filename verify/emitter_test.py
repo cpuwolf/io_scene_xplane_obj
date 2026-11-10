@@ -250,8 +250,7 @@ def run(path):
     warnings = coll.get("xp2b_convert_warnings")
     print("   convert warnings: %s" % warnings, flush=True)
 
-    from io_scene_xplane_obj.xplane2blender.xplane_types import \
-        xplane_file as XF                                      # noqa: E402
+    from io_xplane2blender.xplane_types import xplane_file as XF  # noqa: E402
     files = XF.createFilesFromBlenderRootObjects(bpy.context.scene,
                                                  bpy.context.view_layer)
     if not check(len(files) == 1, "%s: XP2B made %d files" % (path, len(files))):

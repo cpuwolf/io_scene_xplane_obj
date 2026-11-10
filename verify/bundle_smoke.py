@@ -3,12 +3,17 @@
     Blender -b --factory-startup --python verify/bundle_smoke.py -- <zip> [fixture.obj]
 
 `blender --command extension validate` only reads the package structure, and it
-passes on a zip that cannot run: excluding `xplane2blender/tests/` from the
-package is well-formed and then fails at registration with
-`No module named '...xplane2blender.tests'`, because `xplane_file.py` and
-`xplane_wiper_gradient.py` import `test_creation_helpers` at runtime.  So this
-grades the artifact instead of the source tree: unzip it, import the add-on by
-path, and make it import and export one fixture.
+passes on a zip that cannot run.  Two shapes of that have shipped here: a package
+missing `xplane2blender/tests/` (upstream imports `test_creation_helpers` at run
+time) and, now, a zip whose declared wheel was never built - the manifest keeps
+pointing at `wheels/*.whl`, `validate` is happy, and `import io_xplane2blender`
+fails in the user's session.
+
+So this grades the artifact instead of the source tree, and it does it the way
+Blender does it: unpacks the zip, unpacks the wheel the manifest declares into a
+site directory, puts that directory on `sys.path` (Blender puts it *before* the
+system site-packages), then imports the add-on by path and makes it import and
+export one fixture.
 
 The last line is the only signal to grep for:
 
@@ -53,6 +58,24 @@ try:
           % (os.path.basename(ZIP), len(zipfile.ZipFile(ZIP).namelist()),
              os.path.getsize(ZIP) / 1024.0), flush=True)
 
+    # The exporter is a wheel the manifest declares, not a subpackage: unpack it
+    # where Blender would (a site directory on sys.path) and import it by its
+    # upstream name.  A zip that kept the manifest key but lost the file dies
+    # here instead of in a user's session.
+    wheels_dir = os.path.join(work, "wheels")
+    wheels = sorted(f for f in os.listdir(wheels_dir) if f.endswith(".whl")) \
+        if os.path.isdir(wheels_dir) else []
+    if not wheels:
+        fail("the zip carries no wheels/*.whl, so the exporter cannot be imported")
+    site = os.path.join(work, "_site")
+    os.makedirs(site, exist_ok=True)
+    for name in wheels:
+        with zipfile.ZipFile(os.path.join(wheels_dir, name)) as zf:
+            zf.extractall(site)
+    sys.path.insert(0, site)
+    print("wheel: %s (%d files unpacked)"
+          % (", ".join(wheels), len(os.listdir(site))), flush=True)
+
     spec = importlib.util.spec_from_file_location(
         "xp8_smoke", os.path.join(work, "__init__.py"),
         submodule_search_locations=[work])
@@ -84,7 +107,7 @@ try:
     print("imported %s: %d collection(s)"
           % (os.path.basename(FIXTURE), len(colls)), flush=True)
 
-    from xp8_smoke.xplane2blender.xplane_types import xplane_file as XF
+    from io_xplane2blender.xplane_types import xplane_file as XF
     files = XF.createFilesFromBlenderRootObjects(bpy.context.scene,
                                                  bpy.context.view_layer)
     if not files:
@@ -112,7 +135,7 @@ try:
     # (the counter was reachable only as a package attribute upstream). Exercise
     # both: the message itself, and the error the exporter raises for a mesh
     # with no material.
-    from xp8_smoke.xplane2blender.xplane_helpers import XPlaneLogger
+    from io_xplane2blender.xplane_helpers import XPlaneLogger
     try:
         XPlaneLogger.messageToString("info", "smoke", None)
         XPlaneLogger.messageToString("error", "smoke", None)

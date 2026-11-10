@@ -36,8 +36,8 @@ for ob in no_mat[:10]:
     print("  no material: %s (collection=%s)"
           % (ob.name, [c.name for c in ob.users_collection]), flush=True)
 
-from bl_ext.user_default.io_scene_xplane_obj.xplane2blender.xplane_types import \
-    xplane_file as XF  # noqa: E402
+# the exporter ships as a wheel on sys.path, imported by its upstream name
+from io_xplane2blender.xplane_types import xplane_file as XF  # noqa: E402
 
 try:
     files = XF.createFilesFromBlenderRootObjects(bpy.context.scene,

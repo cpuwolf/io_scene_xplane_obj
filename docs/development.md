@@ -54,14 +54,15 @@ blender -b --factory-startup --python scripts/import_warnings.py -- <file.obj>  
 blender -b --factory-startup --python scripts/material_probe.py -- <file.obj>   # each material's wiring, chain by chain
 ```
 
-`--factory-startup` loads no add-ons. The exporter ships inside this package as
-`xplane2blender/`, but it is registered by this add-on's own `register()`, so a
-script that loads the repository by path (the `verify/` and `scripts/` probes do)
-gets the export path for free; one that only enables the *standalone* legacy
-add-on is testing that copy instead, and without either it reports "the file was
-imported, but there is no exportable collection".
+`--factory-startup` loads no add-ons. The exporter ships inside this package as a
+Python wheel (`wheels/io_xplane2blender-*.whl`), and it is registered by this
+add-on's own `register()`, so a script that loads the repository by path (the
+`verify/` and `scripts/` probes do) needs the wheel's site directory on
+`sys.path` to import it; one that only enables the *standalone* legacy add-on is
+testing that copy instead, and without either it reports "the file was imported,
+but there is no exportable collection".
 
-## The bundled exporter (`vendor/XPlane2Blender` -> `xplane2blender/`)
+## The bundled exporter (`vendor/XPlane2Blender` -> `wheels/*.whl`)
 
 The export half is XPlane2Blender's armature build, bundled because the platform
 forbids a feature that depends on another extension (ToS 5.2/5.3, "even if it is
@@ -69,38 +70,42 @@ optional"). Its *history* stays in its own repository: the fork is a submodule a
 `vendor/XPlane2Blender`, pinned in `.gitmodules`, so `git log` there is the real
 one and this repository only records which commit it shipped.
 
-What ships is **generated**: `scripts/vendor_bundle.py` copies the submodule into
-`xplane2blender/` (gitignored) and applies exactly three transformations —
-absolute `from io_xplane2blender.x import y` becomes relative, the places that
-walked the package's attributes name the module instead, and one `is not None`
-in `xplane_ui.RENDER_PT_xplane` (upstream reads `context.active_object.xplane`
-unguarded, so an empty scene throws on every redraw). It exits non-zero if any
-`io_xplane2blender` reference survives, so an upstream rename cannot ship a
-package that fails at import time.
-
-Working on it:
+What ships is a **wheel**, declared with the manifest's top-level
+`wheels = [...]` key and unpacked by Blender into
+`extensions/.local/lib/pythonX.Y/site-packages`, which sits in `sys.path` ahead
+of `scripts/addons/`. The package therefore keeps its upstream top-level name
+`io_xplane2blender`, and the code goes into the wheel as upstream writes it — no
+import rewriting, no attribute-walk fixes — apart from the single entry in
+`PATCHES` in `scripts/build_wheel.py` (the empty-scene crash in
+`xplane_ui.RENDER_PT_xplane`, which the pinned commit does not fix yet). The build
+dies, naming the file, if that snippet ever moves, so an upstream edit cannot ship
+a silently unpatched wheel.
 
 ```sh
 git submodule update --init                     # once, after cloning
-python3 scripts/vendor_bundle.py                 # after any submodule change
+python3 scripts/build_wheel.py                   # after any submodule change
 git -C vendor/XPlane2Blender checkout <commit>   # to move the pinned commit
 ```
 
-* **Never edit `xplane2blender/`** — it is deleted and rebuilt on every run. A
-  fix belongs in the submodule, or (if it is only about living inside this
-  package) in `FIXES` in the script.
-* **No `sys.modules` alias for the old name.** Mapping `io_xplane2blender` onto
-  `xplane2blender` loads every submodule twice, which gives two counters, two
-  updaters and two registration passes in a session that also has a standalone
-  XPlane2Blender enabled.
-* **`xplane2blender/tests/` ships.** `xplane_file.py` and
-  `xplane_wiper_gradient.py` import `test_creation_helpers` at runtime; excluding
-  it produces a zip `extension validate` accepts and that fails to register with
-  `No module named ...xplane2blender.tests`.
+* **The wheel is a build artifact and is gitignored.** Regenerate it before every
+  `extension build`; CI does it right after checkout. A zip built without it still
+  passes `extension validate` and then fails to import in the user's session,
+  which is what `verify/bundle_smoke.py` exists to catch.
+* **Never edit the extracted copy** under `site-packages` — the next sync replaces
+  it. A fix belongs in the submodule.
+* **The name is global.** `.local/.../site-packages` is shared by every extension
+  and wins over `scripts/addons/`, so a user who also enabled a standalone
+  XPlane2Blender gets this copy imported under that name. `_xp2b_registered()`
+  keeps us from registering twice; `__init__._xp2b_module_origin()` prints which
+  copy ran, because a bug report needs that fact.
+* **`tests/` ships inside the wheel.** `xplane_file.py` and
+  `xplane_wiper_gradient.py` import `test_creation_helpers` at runtime; a wheel
+  without it registers and then exports nothing.
 * **CI runs the script** after `checkout (submodules: recursive)`, and
   `verify/bundle_smoke.py` is the gate that matters: it unzips the artifact,
-  registers it, imports `verify/fixtures/nested.obj` and asserts the export
-  carries `ANIM_` lines (25 of them).
+  unpacks the wheel the way Blender does, registers the add-on, imports
+  `verify/fixtures/nested.obj` and asserts the export carries `ANIM_` lines (25
+  of them).
 
 ## The pinned test environment
 

@@ -59,13 +59,17 @@ jobs:
             exit 1
           fi
 
-      - name: Materialise the bundled exporter
+      - name: Build the exporter wheel
         run: |
           set -euo pipefail
-          # xplane2blender/ is generated and gitignored: the submodule holds the
-          # upstream history, this script copies it with the imports made
-          # relative and refuses to continue if any old name is left behind.
-          python3 scripts/vendor_bundle.py
+          # The export half ships as wheels/io_xplane2blender-*.whl, a gitignored
+          # build artifact packed from the submodule.  Without it the zip still
+          # builds and passes `extension validate`, and then `import
+          # io_xplane2blender` fails in the user's session - so it is built here,
+          # never committed.
+          python3 scripts/build_wheel.py
+          sha256sum wheels/*.whl
+          unzip -l wheels/*.whl | tail -3
 
       - name: Build and validate
         run: |

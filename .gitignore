@@ -15,4 +15,6 @@ dist/
 verify/_roundtrip.obj
 verify/*.blend1
 verify/tmp/
-xplane2blender/
+
+# the exporter is a build artifact: scripts/build_wheel.py regenerates it
+wheels/*.whl

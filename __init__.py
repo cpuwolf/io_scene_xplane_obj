@@ -64,6 +64,7 @@ author manipulators, or animations that are more than a hinge.
 import os
 import glob
 import json
+import sys
 
 import bpy
 from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
@@ -949,6 +950,23 @@ def _standalone_xp2b_enabled():
         return False
 
 
+def _xp2b_module_origin():
+    """Where `import io_xplane2blender` resolves to, for the log line.
+
+    Only interesting because the name is global: the wheel lives in
+    `extensions/.local/lib/pythonX.Y/site-packages`, which sits in sys.path
+    before `scripts/addons/` (5 vs 10 on 5.2.2), so a user who also enabled a
+    standalone XPlane2Blender gets this copy imported under that name. Both are
+    the same code family; the line is what tells a bug report which one ran.
+    """
+    module = sys.modules.get(_STANDALONE_XP2B)
+    if module is None:
+        return "<not imported>"
+    path = getattr(module, "__file__", "") or "<unknown>"
+    wheel_site = os.path.join(".local", "lib")
+    return "wheel (%s)" % path if wheel_site in path else path
+
+
 def _xp2b_registered():
     """True when XPlane2Blender's classes are actually registered right now.
 
@@ -968,13 +986,20 @@ def _register_xp2b_now():
     """Import and register the bundled copy; False if that failed."""
     global _own_xp2b
     try:
-        from . import xplane2blender
+        # A wheel, not a subpackage: the exporter keeps its upstream top-level
+        # name, which is why not one line of it is rewritten. Blender unpacks
+        # the wheel declared in blender_manifest.toml into
+        # `extensions/.local/lib/pythonX.Y/site-packages` and puts that on
+        # sys.path, so a plain import finds it.
+        import io_xplane2blender as xplane2blender
         xplane2blender.register()
     except Exception as exc:                              # noqa: BLE001
         print("xplane_obj: the bundled XPlane2Blender did not register (%s); "
               "the import still works, the export does not" % exc, flush=True)
         return False
     _own_xp2b = True
+    print("xplane_obj: registered the bundled exporter from %s"
+          % _xp2b_module_origin(), flush=True)
     return True
 
 
@@ -1083,7 +1108,7 @@ def unregister():
         bpy.utils.unregister_class(cls)
     if _own_xp2b:
         animated = _animated_through_xp2b()
-        from . import xplane2blender
+        import io_xplane2blender as xplane2blender
         xplane2blender.unregister()
         _own_xp2b = False
         if animated:
