@@ -43,6 +43,7 @@ the composition order is unchanged.
 import json
 import math
 import os
+from decimal import Decimal
 
 import bpy
 from mathutils import Matrix, Vector
@@ -287,24 +288,55 @@ def _detent_ranges(state):
     return out
 
 
-def _ranges_tile(ranges, v1_min, v1_max):
-    """XPlane2Blender requires the detent ranges to tile v1_min..v1_max.
+def _q(value):
+    """A detent number the way XPlane2Blender compares them: three decimals.
 
-    Gapless, ascending, and the outer ends equal to the manipulator's own value
-    range: a table that does not cover the range makes the export fail
-    ("must tile the range of the manipulator"), so this is checked before the
-    manipulator is handed over.
+    ``validate_axis_detent_ranges`` wraps every start/end/height and the bone's
+    lift in ``decimal.Decimal(f"{v:.3f}")``, so a detent that tops out at 0.005
+    under a bone that lifts 0.0046 is *accepted* there - both round to 0.005.
+    Comparing raw floats instead refused the 737's flap and spoiler manipulators
+    (8 ranges) that the export would have taken, so every number in this check
+    goes through the same quantisation the exporter uses.
+    """
+    return Decimal("%.3f" % value)
+
+
+def _ranges_tile(ranges, v1_min, v1_max, lift=None):
+    """True when XPlane2Blender's own axis-detent validation will pass.
+
+    That validation runs *during* export and one failure cancels the whole
+    file, so every rule it enforces is checked before the manipulator is handed
+    over, in the file's own order (it does not sort either):
+
+    * the ranges tile ``v1_min..v1_max`` gaplessly, first start to last end;
+    * a range's start is not past its end, and its height is inside ``0..lift``;
+    * a stop pit (start == end) is lower than both neighbours and is never the
+      only range.
+
+    Numbers are compared at three decimals because that is what the exporter
+    does - see ``_q``.
     """
     if not ranges:
         return False
-    rows = sorted(ranges)
-    if any(start > end for start, end, _h in rows):
+    if _q(ranges[0][0]) != _q(v1_min) or _q(ranges[-1][1]) != _q(v1_max):
         return False
-    if abs(rows[0][0] - v1_min) > 1e-3 or abs(rows[-1][1] - v1_max) > 1e-3:
-        return False
-    for (_s1, e1, _h1), (s2, _e2, _h2) in zip(rows, rows[1:]):
-        if abs(e1 - s2) > 1e-3:
+    for index, (start, end, height) in enumerate(ranges):
+        q_start, q_end, q_height = _q(start), _q(end), _q(height)
+        if q_start > q_end:
             return False
+        if lift is not None and not (_q(0.0) <= q_height <= _q(lift)):
+            return False
+        if index + 1 < len(ranges):
+            if q_end != _q(ranges[index + 1][0]):
+                return False
+        if q_start == q_end:
+            if len(ranges) == 1:
+                return False
+            if index > 0 and not _q(ranges[index - 1][2]) > q_height:
+                return False
+            if (index + 1 < len(ranges)
+                    and not q_height < _q(ranges[index + 1][2])):
+                return False
     return True
 
 
@@ -349,17 +381,20 @@ def _apply_drag_rotate(manip, state, args, warnings, rig):
     not met"), and a missing manipulator can be fixed by hand while a file that
     stopped exporting cannot.
     """
+    def warn(text):
+        warnings.append("%s: %s" % (manip.id_data.name, text))
+
     try:
         cursor = _cursor(args[0])
         v1_min, v1_max = float(args[10]), float(args[11])
         dataref1, dataref2 = args[14], args[15]
         tooltip = _tail(args, 16)
     except (IndexError, ValueError):
-        warnings.append("ATTR_manip_drag_rotate: could not parse its arguments")
+        warn("ATTR_manip_drag_rotate: could not parse its arguments")
         return False
 
     if rig is None:
-        warnings.append(
+        warn(
             "ATTR_manip_drag_rotate is not converted: XPlane2Blender takes the "
             "pivot, axis and angle ends from a rotation bone above the mesh, "
             "and this batch has none (the rotation is in a sibling block)")
@@ -368,17 +403,19 @@ def _apply_drag_rotate(manip, state, args, warnings, rig):
     values, angles, axis, lift = rig
     v_lo, v_hi = min(v1_min, v1_max), max(v1_min, v1_max)
     if abs(values[0] - v_lo) > 1e-3 or abs(values[1] - v_hi) > 1e-3:
-        warnings.append(
-            "ATTR_manip_drag_rotate is not converted: its value range is "
-            "%.3f..%.3f but the bone above the mesh is keyed %.3f..%.3f; "
-            "XPlane2Blender writes those keys back as the manipulator's range"
-            % (v1_min, v1_max, values[0], values[1]))
+        warn(
+            "ATTR_manip_drag_rotate is not converted: it maps %.3f..%.3f of its "
+            "dataref but the rotation bone above the mesh is keyed %.3f..%.3f, "
+            "and XPlane2Blender writes the bone's keys back as the manipulator's "
+            "range - so the drag would sweep %.3f..%.3f instead. Re-key the "
+            "rotation to the value span the file asks for if that range matters"
+            % (v1_min, v1_max, values[0], values[1], values[0], values[1]))
         return False
     mine = [_vector((float(args[4]), float(args[5]), float(args[6])), a)
             for a in (float(args[7]), float(args[8]))]
     theirs = [_vector(axis, a) for a in angles]
     if not _same_pair(mine, theirs):
-        warnings.append(
+        warn(
             "ATTR_manip_drag_rotate is not converted: it sweeps %s degrees about "
             "%s but the bone above the mesh sweeps %s about %s; XPlane2Blender "
             "writes the bone's rotation back"
@@ -392,7 +429,7 @@ def _apply_drag_rotate(manip, state, args, warnings, rig):
     ranges = _detent_ranges(state)
     if lift is None:
         if dataref2 != "none":
-            warnings.append(
+            warn(
                 "ATTR_manip_drag_rotate is not converted: the file names detent "
                 "dataref %s but no detent bone sits under the rotation, so "
                 "XPlane2Blender cannot express the lift" % dataref2)
@@ -416,34 +453,38 @@ def _apply_drag_rotate(manip, state, args, warnings, rig):
         manip.type = "drag_rotate"
     else:
         if dataref2 == "none":
-            warnings.append(
+            warn(
                 "ATTR_manip_drag_rotate is not converted: the bones under the "
                 "rotation lift %.4f but the file names no detent dataref, so "
                 "XPlane2Blender would write a lift the file did not ask for"
                 % lift)
             return False
         if abs(lift - float(args[9])) > 1e-3:
-            warnings.append(
+            warn(
                 "ATTR_manip_drag_rotate is not converted: its detent lift is "
                 "%.4f but the bone under the rotation lifts %.4f; XPlane2Blender "
                 "writes the bone's lift back" % (float(args[9]), lift))
             return False
-        if not _ranges_tile(ranges, v1_min, v1_max):
-            warnings.append(
-                "ATTR_manip_drag_rotate is not converted: XPlane2Blender needs "
-                "ATTR_axis_detent_range lines that tile %.3f..%.3f gaplessly, "
-                "this batch has %d" % (v1_min, v1_max, len(ranges)))
-            return False
-        # XP2B also refuses a detent whose height is taller than the bone can
-        # lift ("Height ... must be between 0.0 and the maximum lift height"),
-        # and that check runs during export - which cancels the whole file.
-        tall = [r for r in ranges if r[2] < -1e-4 or r[2] > lift + 1e-4]
+        # Same rule XP2B validates during export ("Height ... must be between
+        # 0.0 and the maximum lift height"), reported on its own because the
+        # numbers are what the author has to fix.  Compared at three decimals
+        # like the exporter does, or a 0.005 detent under a 0.0046 lift reads
+        # as a failure here while XP2B accepts it (both round to 0.005).
+        tall = [r for r in ranges if not (_q(0.0) <= _q(r[2]) <= _q(lift))]
         if tall:
-            warnings.append(
+            warn(
                 "ATTR_manip_drag_rotate is not converted: %d ATTR_axis_detent_range "
                 "height(s) reach %.3f but the bone under the rotation only lifts "
                 "%.4f, which XPlane2Blender rejects at export time"
                 % (len(tall), max(r[2] for r in tall), lift))
+            return False
+        if not _ranges_tile(ranges, v1_min, v1_max, lift):
+            warn(
+                "ATTR_manip_drag_rotate is not converted: XPlane2Blender needs "
+                "ATTR_axis_detent_range lines that tile %.3f..%.3f gaplessly, "
+                "stay inside the bone's lift %.4f and put a stop pit below both "
+                "neighbours; this batch has %d line(s)"
+                % (v1_min, v1_max, lift, len(ranges)))
             return False
         manip.type = "drag_rotate_detent"
     manip.cursor = cursor
@@ -1764,7 +1805,10 @@ class _Converter(object):
                     "ranges" % ob.name)
             return
         lift = self._detent_lift(state)
-        if lift is not None and any(h < -1e-4 or h > lift + 1e-4
+        # Same three-decimal quantisation XP2B validates with (see _q): a range
+        # at 0.005 under a bone that lifts 0.0046 is accepted there and must not
+        # be demoted here.
+        if lift is not None and any(not (_q(0.0) <= _q(h) <= _q(lift))
                                     for _s, _e, h in ranges):
             # Demote the manipulator first: XPlane2Blender refuses a
             # drag_axis_detent that carries no table ("must have axis detent
