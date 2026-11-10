@@ -365,24 +365,87 @@ def _same_pair(a, b, tol=0.02):
     return True
 
 
+def _detent_range_lines(state):
+    """The batch's ATTR_axis_detent_range lines, verbatim, in file order."""
+    out = []
+    for cat, raws in state or []:
+        if cat != "detent_range":
+            continue
+        for raw in raws:
+            if raw.split()[:1] == ["ATTR_axis_detent_range"]:
+                out.append(raw)
+    return out
+
+
+#: the state categories that are the manipulator's own lines.  Native
+#: conversion regenerates all of them from the fields XP2B derives; the verbatim
+#: path has to copy every one, or a drag_rotate loses its detent table and its
+#: intermediate keyframes while keeping its pivot.
+MANIP_STATE_CATEGORIES = ("manip", "detent_axis", "detent_range",
+                          "manip_keyframe", "manip_wheel")
+
+
+def _carry_manip_verbatim(manip, state, warnings, why):
+    """Write the file's own ATTR_manip_* lines through custom attributes.
+
+    XPlane2Blender's own manipulator settings are derived from the bones, so a
+    file whose line says something the bones do not (a narrower value span, a
+    different axis, a detent taller than the bone lifts, a rotation living in a
+    sibling block) cannot go through them.  The line itself is the file's data
+    and X-Plane reads it from the command stream - the two really are separate
+    things - and an object's custom attributes are written verbatim, which is
+    how ATTR_manip_device and MAGNET already survive.
+
+    Every line of the manipulator goes along, in the file's own order:
+    ATTR_axis_detented, the detent range table, the intermediate
+    ATTR_manip_keyframe rows and the wheel rate.  XP2B writes the table only for
+    its own detent types and the keyframes only from the bone's keys, so none of
+    them can be left to it here.
+
+    So the fallback is not a loss, it just costs the N-panel: the manipulator
+    becomes a raw attribute instead of editable fields.
+    """
+    ob = manip.id_data
+    manip.enabled = False                   # XP2B must not write one of its own
+    carried = 0
+    for cat, raws in state or []:
+        if cat not in MANIP_STATE_CATEGORIES:
+            continue
+        for line in raws:
+            keyword = line.split()[0]
+            _add_custom_attribute(ob.xplane, keyword,
+                                  line[len(keyword):].strip(), unique=False)
+            carried += 1
+    warnings.append(
+        "%s: ATTR_manip_drag_rotate and %d companion line(s) are carried "
+        "verbatim (custom attributes, not editable in the N-panel) - %s"
+        % (ob.name, max(0, carried - 1), why))
+    return True
+
+
 def _apply_drag_rotate(manip, state, args, warnings, rig):
     """ATTR_manip_drag_rotate -> XP2B's drag_rotate / drag_rotate_detent.
 
     The file writes the pivot, the rotation axis, both angle ends, the detent
     lift and both value ranges; XPlane2Blender derives every one of those from
-    the bones and writes them back, so what is copied is the cursor, the two
-    datarefs and the tooltip.  Whether it can be handed over at all depends on
-    the rig - `rig` is what the bone chain above this batch offers, as
-    ``(rotation dataref, detent dataref or None)``.
+    the bones and writes them back, so what is copied to the native settings is
+    the cursor, the two datarefs and the tooltip.  Whether that is allowed to
+    happen depends on the rig - `rig` is what the bone chain above this batch
+    offers, as ``(rotation dataref, detent dataref or None)``.
 
-    When the rig does not offer the bones XP2B looks for, the manipulator is
-    left off and the reason is reported: handing it over anyway makes XP2B
-    abort the whole export ("Requirements for Drag Rotate manipulator ... are
-    not met"), and a missing manipulator can be fixed by hand while a file that
-    stopped exporting cannot.
+    When the line and the bones disagree, the native settings would export
+    *different* numbers, so the line goes out verbatim instead (see
+    ``_carry_manip_verbatim``).  Refusing outright was wrong: the manipulator
+    is object data, X-Plane never requires it to agree with the ANIM table, and
+    the two disagree in ordinary files (a throttle lever keyed -1..1 with the
+    reverse gate's manipulator mapping only -1..0).
     """
     def warn(text):
         warnings.append("%s: %s" % (manip.id_data.name, text))
+
+    def carry(why):
+        """XP2B's own settings would write different numbers - go verbatim."""
+        return _carry_manip_verbatim(manip, state, warnings, why)
 
     try:
         cursor = _cursor(args[0])
@@ -390,61 +453,51 @@ def _apply_drag_rotate(manip, state, args, warnings, rig):
         dataref1, dataref2 = args[14], args[15]
         tooltip = _tail(args, 16)
     except (IndexError, ValueError):
-        warn("ATTR_manip_drag_rotate: could not parse its arguments")
-        return False
+        return carry("its arguments did not parse, so nothing could be "
+                     "regenerated from them")
 
     if rig is None:
-        warn(
-            "ATTR_manip_drag_rotate is not converted: XPlane2Blender takes the "
-            "pivot, axis and angle ends from a rotation bone above the mesh, "
-            "and this batch has none (the rotation is in a sibling block)")
-        return False
+        return carry(
+            "the rotation lives in a sibling block, so XPlane2Blender finds no "
+            "rotation bone above this mesh (it writes the pivot, axis and angle "
+            "ends from that bone)")
 
     values, angles, axis, lift = rig
     v_lo, v_hi = min(v1_min, v1_max), max(v1_min, v1_max)
     if abs(values[0] - v_lo) > 1e-3 or abs(values[1] - v_hi) > 1e-3:
-        warn(
-            "ATTR_manip_drag_rotate is not converted: it maps %.3f..%.3f of its "
-            "dataref but the rotation bone above the mesh is keyed %.3f..%.3f, "
-            "and XPlane2Blender writes the bone's keys back as the manipulator's "
-            "range - so the drag would sweep %.3f..%.3f instead. Re-key the "
-            "rotation to the value span the file asks for if that range matters"
-            % (v1_min, v1_max, values[0], values[1], values[0], values[1]))
-        return False
+        return carry(
+            "it maps %.3f..%.3f of its dataref while the rotation bone above it "
+            "is keyed %.3f..%.3f, and XPlane2Blender writes the bone's keys as "
+            "the manipulator's range"
+            % (v1_min, v1_max, values[0], values[1]))
     mine = [_vector((float(args[4]), float(args[5]), float(args[6])), a)
             for a in (float(args[7]), float(args[8]))]
     theirs = [_vector(axis, a) for a in angles]
     if not _same_pair(mine, theirs):
-        warn(
-            "ATTR_manip_drag_rotate is not converted: it sweeps %s degrees about "
-            "%s but the bone above the mesh sweeps %s about %s; XPlane2Blender "
-            "writes the bone's rotation back"
+        return carry(
+            "it sweeps %s degrees about %s while the bone above the mesh sweeps "
+            "%s about %s, and XPlane2Blender writes the bone's rotation"
             % ("/".join("%.3f" % a for a in (float(args[7]), float(args[8]))),
                "/".join("%.3f" % v for v in (float(args[4]), float(args[5]),
                                              float(args[6]))),
                "/".join("%.3f" % a for a in angles),
                "/".join("%.3f" % v for v in axis)))
-        return False
 
     ranges = _detent_ranges(state)
     if lift is None:
         if dataref2 != "none":
-            warn(
-                "ATTR_manip_drag_rotate is not converted: the file names detent "
-                "dataref %s but no detent bone sits under the rotation, so "
-                "XPlane2Blender cannot express the lift" % dataref2)
-            return False
+            return carry(
+                "it names detent dataref %s but no detent bone sits under the "
+                "rotation, so XPlane2Blender would write a lift of 0" % dataref2)
         if ranges:
             # XPlane2Blender writes ATTR_axis_detent_range only for its detent
-            # variants, and this rotation has no detent bone to make one.  A
-            # custom attribute is emitted verbatim right after the manipulator,
-            # which is the slot the file wants the ranges in - so the visual
-            # detents survive even though the lift is not imported.
-            for start, end, height in ranges:
-                _add_custom_attribute(manip.id_data.xplane,
-                                      "ATTR_axis_detent_range",
-                                      "%g %g %g" % (start, end, height),
-                                      unique=False)
+            # variants, and this rotation has no detent bone to make one.  The
+            # file's own lines ride the custom attributes, byte for byte, which
+            # is where the file had them.
+            for line in _detent_range_lines(state):
+                _add_custom_attribute(
+                    manip.id_data.xplane, "ATTR_axis_detent_range",
+                    line[len("ATTR_axis_detent_range"):].strip(), unique=False)
             warnings.append(
                 "%s: %d ATTR_axis_detent_range line(s) kept as custom attributes "
                 "- the rotation has no detent bone, so XPlane2Blender would "
@@ -453,39 +506,30 @@ def _apply_drag_rotate(manip, state, args, warnings, rig):
         manip.type = "drag_rotate"
     else:
         if dataref2 == "none":
-            warn(
-                "ATTR_manip_drag_rotate is not converted: the bones under the "
-                "rotation lift %.4f but the file names no detent dataref, so "
-                "XPlane2Blender would write a lift the file did not ask for"
-                % lift)
-            return False
+            return carry(
+                "the bone under the rotation lifts %.4f but the file names no "
+                "detent dataref, so XPlane2Blender would write a lift the file "
+                "did not ask for" % lift)
         if abs(lift - float(args[9])) > 1e-3:
-            warn(
-                "ATTR_manip_drag_rotate is not converted: its detent lift is "
-                "%.4f but the bone under the rotation lifts %.4f; XPlane2Blender "
-                "writes the bone's lift back" % (float(args[9]), lift))
-            return False
+            return carry(
+                "its detent lift is %.4f while the bone under the rotation lifts "
+                "%.4f, and XPlane2Blender writes the bone's lift"
+                % (float(args[9]), lift))
         # Same rule XP2B validates during export ("Height ... must be between
-        # 0.0 and the maximum lift height"), reported on its own because the
-        # numbers are what the author has to fix.  Compared at three decimals
-        # like the exporter does, or a 0.005 detent under a 0.0046 lift reads
-        # as a failure here while XP2B accepts it (both round to 0.005).
+        # 0.0 and the maximum lift height").  Compared at three decimals like
+        # the exporter does, or a 0.005 detent under a 0.0046 lift reads as a
+        # mismatch here while XP2B accepts it (both round to 0.005).
         tall = [r for r in ranges if not (_q(0.0) <= _q(r[2]) <= _q(lift))]
         if tall:
-            warn(
-                "ATTR_manip_drag_rotate is not converted: %d ATTR_axis_detent_range "
-                "height(s) reach %.3f but the bone under the rotation only lifts "
-                "%.4f, which XPlane2Blender rejects at export time"
-                % (len(tall), max(r[2] for r in tall), lift))
-            return False
+            return carry(
+                "%d ATTR_axis_detent_range height(s) reach %.3f while the bone "
+                "under the rotation lifts %.4f, which XPlane2Blender rejects at "
+                "export time" % (len(tall), max(r[2] for r in tall), lift))
         if not _ranges_tile(ranges, v1_min, v1_max, lift):
-            warn(
-                "ATTR_manip_drag_rotate is not converted: XPlane2Blender needs "
-                "ATTR_axis_detent_range lines that tile %.3f..%.3f gaplessly, "
-                "stay inside the bone's lift %.4f and put a stop pit below both "
-                "neighbours; this batch has %d line(s)"
-                % (v1_min, v1_max, lift, len(ranges)))
-            return False
+            return carry(
+                "its %d ATTR_axis_detent_range line(s) do not tile %.3f..%.3f "
+                "the way XPlane2Blender validates them"
+                % (len(ranges), v1_min, v1_max))
         manip.type = "drag_rotate_detent"
     manip.cursor = cursor
     manip.dataref1 = dataref1

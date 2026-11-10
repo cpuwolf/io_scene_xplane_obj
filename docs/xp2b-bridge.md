@@ -54,6 +54,18 @@ Two of those are worth the extra sentence they get:
 Material clones are shared: batches that ask for the same state combination get
 one clone, not one each.
 
+* **A manipulator XPlane2Blender would have to rewrite goes out verbatim.** Its
+  drag-rotate settings are derived from the bones above the mesh — pivot, axis,
+  both angle ends, the value range and the detent lift — so where the file's line
+  disagrees with the bone (a throttle lever keyed `-1..1` whose reverse gate maps
+  only `-1..0`, a rotation that lives in a sibling block, a detent taller than the
+  bone can lift) the native fields would export *different* numbers. The line is
+  then carried through the object's custom attributes instead, together with its
+  detent table, intermediate keyframes and wheel rate. X-Plane reads the
+  manipulator and the `ANIM` table independently, so the export is exact; what it
+  costs is the N-panel — that batch's manipulator is a raw attribute rather than
+  editable fields. Every other line still takes the native route.
+
 ## Particles
 
 A particle file is two records, and both have to land or neither exports:

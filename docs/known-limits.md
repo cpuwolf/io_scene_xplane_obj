@@ -27,6 +27,11 @@
   reported.
 * `ATTR_manip_device` (TDS GTN750Xi and friends) is a third-party extension with
   no XP2B counterpart and is reported, not converted.
+* A drag-rotate manipulator whose line disagrees with the bones above its mesh (a
+  narrower value span, a different axis, a rotation in a sibling block, a detent
+  taller than the bone lifts) still reaches the exported file — it is carried
+  verbatim — but it is a raw custom attribute on that object rather than editable
+  manipulator fields in the N-panel. Editing it means editing the attribute.
 * The exporter writes from the object tree, not from the file's original text:
   it is XPlane2Blender's writer (bundled, see [CREDITS](../CREDITS.md)), so a
   batch's geometry comes out as the scene has it, not as the bytes were.
