@@ -1058,23 +1058,41 @@ def _animated_through_xp2b():
     return False
 
 
+def _rescue_xp2b():
+    """Put the exporter back if nothing re-registered it during a disable."""
+    if not _own_xp2b and not _xp2b_registered():
+        print("xplane_obj: re-registering the bundled exporter - this scene is "
+              "animated through its properties and leaving them unregistered "
+              "crashes Blender on the next depsgraph update", flush=True)
+        _register_xp2b_now()
+    return None
+
+
+def _rescue_xp2b_later():
+    """Ask for that rescue on the next event-loop tick (no-op in background)."""
+    try:
+        bpy.app.timers.register(_rescue_xp2b, first_interval=0.0)
+    except (AttributeError, ValueError):
+        _rescue_xp2b()
+
+
 def unregister():
     global _own_xp2b
     bpy.types.TOPBAR_MT_file_import.remove(_menu_import)
     for cls in reversed(CLASSES):
         bpy.utils.unregister_class(cls)
     if _own_xp2b:
-        if _animated_through_xp2b():
-            # keep it: removing the property groups under a keyed scene crashes
-            # the depsgraph (see _animated_through_xp2b). The exporter staying
-            # alive until Blender restarts is the cheaper of the two.
-            print("xplane_obj: the bundled exporter stays registered - this "
-                  "scene is animated through its properties, and unregistering "
-                  "them crashes Blender on the next depsgraph update", flush=True)
-        else:
-            from . import xplane2blender
-            xplane2blender.unregister()
-            _own_xp2b = False
+        animated = _animated_through_xp2b()
+        from . import xplane2blender
+        xplane2blender.unregister()
+        _own_xp2b = False
+        if animated:
+            # Nothing may put the properties back - an uninstall, or a plain
+            # disable. They cannot stay gone: the scene's bone curves address
+            # them, and the first depsgraph build after that crashes Blender
+            # (see _animated_through_xp2b). One tick is enough to let a version
+            # install register its own copy first; if it did, this does nothing.
+            _rescue_xp2b_later()
 
 
 if __name__ == "__main__":

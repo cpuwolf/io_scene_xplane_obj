@@ -24,3 +24,11 @@
 * The exporter writes from the object tree, not from the file's original text:
   it is XPlane2Blender's writer (bundled, see [CREDITS](../CREDITS.md)), so a
   batch's geometry comes out as the scene has it, not as the bytes were.
+* **Disabling or uninstalling while an aircraft is open.** The animation in the
+  scene is keyed through the exporter's own properties
+  (`pose.bones["x"].xplane.datarefs[0].value`), so they cannot stay unregistered:
+  Blender crashes on the next depsgraph build. The add-on unregisters them for
+  real (so the next version can take over) and puts them back on the following
+  event-loop tick if nothing did - which is what happens on a plain disable or an
+  uninstall. Nothing to do about it from your side, but if you disable the add-on
+  on purpose, restart Blender afterwards rather than trusting the session.
