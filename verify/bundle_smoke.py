@@ -139,6 +139,12 @@ try:
     # restart. It did not: the guard read the leftover properties, decided an
     # exporter was already there, and Export stayed missing until Blender quit.
     mod.unregister()
+    if not hasattr(bpy.types, "EXPORT_OT_xplane_obj"):
+        fail("unregistering with an animated scene removed the exporter's "
+             "properties - the next depsgraph build crashes Blender (0.11.7 "
+             "died exactly there: SIGSEGV in RNA_path_resolve_property)")
+    print("unregister kept the exporter: this scene is animated through it",
+          flush=True)
     mod.register()
     if not hasattr(bpy.types, "EXPORT_OT_xplane_obj"):
         fail("re-registering the add-on left no exporter - a version installed "

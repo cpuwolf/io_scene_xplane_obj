@@ -1029,15 +1029,52 @@ def register():
     bpy.types.TOPBAR_MT_file_import.append(_menu_import)
 
 
+def _fcurves_of(action):
+    """Every F-Curve of an Action, legacy or slotted."""
+    legacy = getattr(action, "fcurves", None)
+    if legacy is not None:
+        return list(legacy)
+    out = []
+    for layer in getattr(action, "layers", []):
+        for strip in layer.strips:
+            for bag in getattr(strip, "channelbags", []):
+                out.extend(bag.fcurves)
+    return out
+
+
+def _animated_through_xp2b():
+    """True when some F-Curve's data path runs through XPlane2Blender's props.
+
+    `pose.bones["yoke"].xplane.datarefs[0].value` and friends exist only while
+    those property groups are registered. Unregistering them with such a curve in
+    the file makes Blender resolve a freed RNA struct on the next depsgraph build:
+    a hard crash (RNA_path_resolve_property, EXCEPTION_ACCESS_VIOLATION on
+    Windows, SIGSEGV here), not an exception anyone can catch.
+    """
+    for action in bpy.data.actions:
+        for fcurve in _fcurves_of(action):
+            if ".xplane." in fcurve.data_path:
+                return True
+    return False
+
+
 def unregister():
     global _own_xp2b
     bpy.types.TOPBAR_MT_file_import.remove(_menu_import)
     for cls in reversed(CLASSES):
         bpy.utils.unregister_class(cls)
     if _own_xp2b:
-        from . import xplane2blender
-        xplane2blender.unregister()
-        _own_xp2b = False
+        if _animated_through_xp2b():
+            # keep it: removing the property groups under a keyed scene crashes
+            # the depsgraph (see _animated_through_xp2b). The exporter staying
+            # alive until Blender restarts is the cheaper of the two.
+            print("xplane_obj: the bundled exporter stays registered - this "
+                  "scene is animated through its properties, and unregistering "
+                  "them crashes Blender on the next depsgraph update", flush=True)
+        else:
+            from . import xplane2blender
+            xplane2blender.unregister()
+            _own_xp2b = False
 
 
 if __name__ == "__main__":

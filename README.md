@@ -1,114 +1,113 @@
-# X-Plane OBJ8 Import and Export — `.obj` and `.acf`, in and out of Blender
+# X-Plane aircraft, opened in Blender — and handed back
 
-Import an [X-Plane OBJ8](https://developer.x-plane.com/article/obj8-file-format-specification/)
-`.obj` into a Blender scene you can edit — geometry, materials, animations,
-manipulators and lights — and export it back out. Reading and writing are one
-package: the exporter that writes X-Plane's `.obj`
-([XPlane2Blender](https://github.com/X-Plane/XPlane2Blender)) ships inside this
-add-on, so there is nothing else to install and no version to match up.
+One install. Import a whole aircraft or a single part, edit anything, export it
+back to X-Plane. **Including the animations** — the ones X-Plane ships already
+compiled away.
 
-**File > Import > X-Plane OBJ8 (.obj)** (or just drag the file onto the
-viewport), edit, **File > Export > X-Plane Object (.obj)**. There is no convert
-step to remember and nothing to set up per file.
+<img src="blender_import_demo.gif" width="640" alt="Importing an X-Plane aircraft into Blender">
 
-Drop an aircraft's **`.acf`** instead and every object it attaches is imported in
-one go — the whole aircraft, not one part of it — under one parent collection
-named after the `.acf`:
+## Four things people use it for
 
-```
-Cessna_172SP.acf                  collection — one per .acf, an organiser only
-├ Cessna_172SP_cockpit.obj        collection — the exportable XPlane2Blender layer
-├ fuselage.obj                    collection
-└ wings.obj                       collection  (…one per .obj the aircraft attaches)
-```
+### 1. Open an aircraft you could only fly
 
-## The pipeline
+A shipped aircraft is an `.acf` plus a pile of OBJ8 files: text, but baked — no
+scene, no rig, no source to edit. You have the aircraft, not its project.
 
-```
-X-Plane aircraft
-  .acf  →  every .obj it attaches
-  .obj  →  one object
-  folder of .obj files
-        │
-        │  ①  IMPORT — this add-on
-        │      File > Import, or drop the file on the viewport
-        ▼
-Blender
-  one exportable collection per .obj: geometry, materials, animations,
-  manipulators, cockpit panels — editable and previewable
-        │
-        │  ②  EDIT — Blender
-        ▼
-this add-on's bundled exporter
-  File > Export > X-Plane Object (.obj)
-        │
-        │  ③  EXPORT — same package, nothing else installed
-        ▼
-X-Plane
-```
+Drop the `.acf` and the **entire aircraft** lands in Blender: every part, its
+materials, its cockpit, its animations, in one collection named after the aircraft.
 
-The exporter inside this package is XPlane2Blender's **armature build** — 4.5.0
-plus the Blender 5.x fix — and which build it is matters: every official release
-up to 4.5.0 still reads `Action.groups` / `Action.fcurves`, which Blender 5
-removed, and then writes **no animations at all** while the export reports
-*finished*. That is why the exporter is bundled at that exact commit rather than
-left for you to install: upstream authors, licence and the two changes made when
-vendoring it are in [CREDITS.md](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/CREDITS.md).
+### 2. Get the animations back
 
-![Importing an X-Plane OBJ8 object into Blender](blender_import_demo.gif)
+This is the part that is hard to find anywhere else. Every `ANIM_` block becomes a
+**bone with keyframes on the time line**, keyed to the same frames the file uses:
 
-```
-C90B_cockpit.obj                 collection — the exportable XPlane2Blender layer
-└ C90B_cockpit.obj.worldcenter   Empty — move this to move the whole object
-  └ C90B_cockpit.obj.bones       armature — one bone per ANIM block
-    └ C90B_cockpit_000 …         one mesh per geometry command
-```
+* yokes and throttles turn, gear retracts, flaps travel, doors open — scrub the
+  time line and watch it happen
+* from there it is a normal armature: re-time it, fix a part that comes apart,
+  mirror a motion, drive it from a different dataref, or add a control that was
+  never in the file
 
-## Install
+X-Plane's own OBJ8 keeps nothing you could rebuild that from. This writes it back
+as an editable rig.
 
-One add-on, one step.
+<img src="aircraft_demo.gif" width="640" alt="Laminar's King Air C90B imported from the .obj X-Plane ships">
 
-1. **Preferences > Get Extensions > search `X-Plane OBJ8` > Install.**
-   (No platform account yet? Drag the release zip onto Blender instead.)
-2. **Restart Blender.** Add-ons load their modules at startup, so the restart is
-   what makes it take effect.
+### 3. Fix the aircraft that broke
 
-Blender 5.0 or newer. The exporter is inside this package, so nothing else has to
-be installed and nothing can go out of sync.
+* an update changed the datarefs and now a lever moves the wrong way
+* a hinge was always 2 cm off, or a panel texture lost its gloss
+* forty-year-old freeware you refuse to let die, and X-Plane 12 refuses to light
+  properly
+* your own aircraft, whose original project is on a drive you no longer have
 
-If you already run a standalone XPlane2Blender, this add-on steps aside and uses
-yours — it never registers its bundled copy on top of one that is enabled.
+Import, fix the thing, export. It is the same aircraft, one part better.
 
-## What people ask first
+### 4. Keep a project maintainable
 
-| question | answer |
+Importing a folder of OBJ8 into one scene is how a legacy aircraft becomes
+something you can work on again: real collections, one mesh per part, materials
+as materials, animations as armatures — and an exporter on the other side.
+
+## What survives the trip
+
+| In the file | In Blender |
 | --- | --- |
-| Does it export too? | Yes. The exporter (XPlane2Blender's armature build) is bundled, so `File > Export > X-Plane Object (.obj)` works out of the same install. |
-| Do I lose the original file? | No. The file's own text is kept on the collection (custom properties), and everything the conversion cannot express is reported rather than dropped silently. |
-| Will a lever still move? | Yes — one bone per `ANIM_*` block, one keyframe per key the file has, key N on frame N. Drag the time line to watch it. |
-| Are X-Plane's normal maps handled? | Yes, as the **combo map** they are: `R,G` → normal (Z rebuilt), blue → Metallic (metalness mode), alpha → gloss inverted into Roughness. `TEXTURE_MAP` (12.1) included. |
-| Cockpit panels, manipulators, light levels? | `ATTR_cockpit*`, `ATTR_manip_*`, `ATTR_light_level`, `ATTR_draw_disable`, `ATTR_solid_camera` all land on the XPlane2Blender material/object/layer fields they belong to. |
-| Texture paths in the exported file? | The texture set is also written onto the XP2B **layer**, which is where its exporter reads them from. |
-| Files the sim loads but exporters mangle? | A missing `POINT_COUNTS` and trailing `#` comments are both tolerated. |
-| The whole aircraft at once? | Drag its **`.acf`** onto the viewport: every `.obj` the aircraft attaches is imported, one collection each, all of them children of one collection named after the `.acf`. The `.acf` itself is only read. |
+| geometry, UVs, per-vertex normals | one mesh per part, normals kept as authored (not averaged) |
+| `ANIM_*` blocks | bones + keyframes, drag the time line to pose it |
+| `ANIM_show` / `ANIM_hide` | attached to the bone that owns that part |
+| mixed normal-metalness **combo maps** | split into Normal / Metallic / Roughness, ready to paint |
+| cockpit panels, devices, lit regions | X-Plane layer and material settings — editable, and written back |
+| manipulators (drag, rotate, push, toggle, axis, detents) | the object's manipulator settings, same numbers |
+| light levels, `ATTR_draw_disable`, culling, LODs, `LIGHT_PARAM` | the fields X-Plane reads, plus real light objects |
+| the file's own text | kept on the collection, so nothing is guessed twice |
+
+And the export side is in the same package — no second add-on, no version to match.
+
+## Quick start
+
+1. **Preferences > Get Extensions**, search **X-Plane OBJ8**, install, restart
+   Blender once.
+2. Drag an aircraft's **`.acf`** (whole aircraft) or a **`.obj`** onto the viewport.
+3. Edit. **File > Export > X-Plane Object (.obj)**.
+
+Blender 5.0 or newer. Every part is one collection, so you can hide what you are
+not touching and work in a 400-part cockpit without scrolling.
+
+## Tested on
+
+Laminar's Cessna 172 (42 objects from its `.acf`), Boeing 737-800, Airbus A330
+cockpits, plus add-on aircraft such as the King Air C90B — whose animations are
+the kind of thing you only get back with an importer that reads the armature
+structure properly. The numbers behind that claim are in
+[known limits](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/known-limits.md).
+
+## What it does not do
+
+* **It never writes the `.acf`.** That file is read only, as Laminar asks:
+  anything you change goes into the `.obj` files.
+* **Per-object attach offsets are not applied.** Every part arrives at its own
+  origin, exactly as if you had opened each `.obj` by hand.
+* **A few things cannot be expressed in Blender** — an aircraft that mixes cockpit
+  panel modes, for instance — and those are reported, not silently dropped.
 
 ## Docs
 
 | | |
 | --- | --- |
 | [install](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/install.md) | requirements, checking it worked, uninstall |
-| [credits](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/CREDITS.md) | the bundled exporter: authors, licence, what was changed |
-| [import](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/import.md) | the tree, meshes, materials, combo maps, tolerant parsing, where the data lives |
-| [animation](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/animation.md) | armature, keys, `ANIM_show/hide`, the dataref panel, import options |
-| [XPlane2Blender bridge](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/xp2b-bridge.md) | what maps to what, and the two exceptions worth knowing |
+| [import](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/import.md) | what the import builds, combo maps, tolerant parsing |
+| [animation](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/animation.md) | the armature, keys, `ANIM_show/hide`, the dataref panel |
+| [export bridge](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/xp2b-bridge.md) | what maps to what, and the exceptions worth knowing |
 | [known limits](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/known-limits.md) | what is not carried, and how accurate the bridge is |
+| [credits](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/CREDITS.md) | the bundled exporter: authors, licence, what was changed |
 | [development](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/development.md) | dev link, tests, releasing |
-
-![Laminar's King Air C90B imported from its own .obj](aircraft_demo.gif)
-
-Laminar's King Air C90B, imported straight from the `.obj` X-Plane ships.
 
 ## License
 
 GPL-3.0-or-later, matching the
 [extension platform requirements](https://docs.blender.org/manual/en/latest/advanced/extensions/licenses.html).
+The exporter inside this package is XPlane2Blender's armature build; its authors
+and licence are credited in [CREDITS.md](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/CREDITS.md).
+
+<sub>Not affiliated with Laminar Research. Use it on aircraft you have the right
+to modify.</sub>
