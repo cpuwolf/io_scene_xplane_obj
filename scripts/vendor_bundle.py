@@ -102,6 +102,15 @@ FIXES = [
     ("xplane_ui.py",
      "    import io_xplane2blender.xplane_utils.xplane_datarefs_txt_parser",
      "    from .xplane_utils import xplane_datarefs_txt_parser"),
+    # upstream reads context.active_object without a guard, so an empty scene
+    # (no active object) throws on every redraw of the Render panel - reported by
+    # a user installing on Windows with nothing open. One `is not None`.
+    ("xplane_ui.py",
+     "            if context.active_object.xplane.isExportableRoot:\n"
+     "                active_root = context.active_object",
+     "            active = context.active_object\n"
+     "            if active is not None and active.xplane.isExportableRoot:\n"
+     "                active_root = active"),
     ("tests/__init__.py",
      "import io_xplane2blender\n",
      ""),

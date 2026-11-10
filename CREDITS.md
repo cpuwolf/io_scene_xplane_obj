@@ -25,13 +25,17 @@ features depend on another add-on.
   history.
 
 What is changed when packaging it, and nothing else — `scripts/vendor_bundle.py`
-does both, so the submodule itself stays untouched:
+does all three, so the submodule itself stays untouched:
 
 1. Imports that named the package absolutely (`from io_xplane2blender.x import y`)
    are relative (`from .x import y`), because the package now lives inside this
    one and must not borrow the standalone add-on's top-level name.
 2. The places that did `import io_xplane2blender` and then walked its attributes
    import the module they use instead.
+3. One bug fix, forced by how visible it is: `xplane_ui.RENDER_PT_xplane` reads
+   `context.active_object.xplane` with no None guard, so **an empty scene throws
+   on every redraw** as soon as this exporter is registered. It is a single
+   `is not None` and it is reported upstream; everything else is untouched.
 
 Everything else — operators, panels, properties, the updater, resources, tests —
 is upstream code at the pinned commit.

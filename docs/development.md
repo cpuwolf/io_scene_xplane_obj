@@ -70,9 +70,11 @@ optional"). Its *history* stays in its own repository: the fork is a submodule a
 one and this repository only records which commit it shipped.
 
 What ships is **generated**: `scripts/vendor_bundle.py` copies the submodule into
-`xplane2blender/` (gitignored) and applies exactly two transformations — absolute
-`from io_xplane2blender.x import y` becomes relative, and the eight places that
-walked the package's attributes name the module instead. It exits non-zero if any
+`xplane2blender/` (gitignored) and applies exactly three transformations —
+absolute `from io_xplane2blender.x import y` becomes relative, the places that
+walked the package's attributes name the module instead, and one `is not None`
+in `xplane_ui.RENDER_PT_xplane` (upstream reads `context.active_object.xplane`
+unguarded, so an empty scene throws on every redraw). It exits non-zero if any
 `io_xplane2blender` reference survives, so an upstream rename cannot ship a
 package that fails at import time.
 
