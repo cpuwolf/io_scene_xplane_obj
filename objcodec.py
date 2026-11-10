@@ -505,18 +505,26 @@ def _is_global(kw):
 
 
 def _snapshot(state, order):
+    """The state a batch draws under, in write order.
+
+    Every category the parser recorded has to survive here: a repeatable one
+    (``ATTR_axis_detent_range``, ``ATTR_manip_keyframe``) is appended to
+    ``state`` but never to ``state_order``, and dropping it from the snapshot
+    made the rows invisible to the conversion - the S-76C's manipulator
+    keyframes and every detent table would vanish between parse and export.
+    """
     out = []
     for cat in STATE_ORDER:
         if cat in state:
             out.append([cat, list(state[cat])])
     seen = set(c for c, _ in out)
-    # categories not in STATE_ORDER keep their insertion order
-    for cat in order:
-        if cat not in seen and cat != "detent_range":
+    # categories not in STATE_ORDER keep their insertion order, in `order`
+    # first (that is where the parser records them) and then whatever else the
+    # state still holds
+    for cat in list(order) + [c for c in state if c not in order]:
+        if cat not in seen and cat in state:
             out.append([cat, list(state[cat])])
             seen.add(cat)
-    if "detent_range" in state and "detent_range" not in seen:
-        out.append(["detent_range", list(state["detent_range"])])
     return out
 
 

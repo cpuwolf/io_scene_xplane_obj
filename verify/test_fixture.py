@@ -153,6 +153,34 @@ def main():
     flipped = OC.flip_winding(o.leaves[0].indices)
     check(flipped == [0, 2, 1, 0, 3, 2], "flip_winding: %r" % (flipped,))
 
+    # ---- repeatable state has to reach the leaf snapshot ----------------
+    # ATTR_axis_detent_range and ATTR_manip_keyframe are appended to `state`
+    # but never to `state_order` (they do not replace the category before
+    # them), and the snapshot used to drop everything it did not find in
+    # either list: the S-76C's manipulator keyframes and every detent table
+    # were parsed and then thrown away before the conversion could see them.
+    repeatable = "\n".join([
+        "I", "800", "OBJ", "",
+        "TEXTURE\tmini.png",
+        "POINT_COUNTS\t3 0 0 3", "",
+        "VT\t0\t0\t0\t0\t1\t0\t0\t0",
+        "VT\t1\t0\t0\t0\t1\t0\t1\t0",
+        "VT\t1\t0\t1\t0\t1\t0\t1\t1",
+        "IDX10\t0 1 2", "",
+        "ATTR_manip_drag_rotate\thand\t0\t0\t0\t1\t0\t0\t0\t12\t0.5\t0\t1\t0\t0.5\tsim/x\tnone\tkf",
+        "ATTR_manip_keyframe\t1\t12",
+        "ATTR_axis_detent_range\t0\t0\t0",
+        "TRIS\t0\t3", "",
+    ])
+    rr = OC.parse_text(repeatable)
+    cats = [c for c, _raws in rr.leaves[0].state]
+    check("manip_keyframe" in cats,
+          "snapshot dropped ATTR_manip_keyframe: %r" % (cats,))
+    check("detent_range" in cats,
+          "snapshot dropped ATTR_axis_detent_range: %r" % (cats,))
+    check([len(r) for c, r in rr.leaves[0].state if c == "manip_keyframe"] == [1],
+          "manip_keyframe rows: %r" % (rr.leaves[0].state,))
+
     print()
     if fails:
         print("%d CHECK(S) FAILED" % len(fails))
