@@ -71,6 +71,6 @@ paths_exclude_pattern = [
                 # them, and the extension platform renders only the README
   "/dev-link.sh",
   "/*.zip",
-  "/*.gif",     # the README demo, 2 MB of it: GitHub can have it, the add-on
-                # package cannot
+  "/*.gif",     # the README demos, ~6 MB of them: GitHub can have them, the
+                # add-on package cannot
 ]
