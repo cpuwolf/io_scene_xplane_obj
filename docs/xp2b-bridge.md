@@ -19,6 +19,9 @@ lights, LODs) is what it is good at — nothing here writes a `.obj` itself.
 | static `ANIM_trans` / `ANIM_rotate` | plain transforms |
 | `ANIM_show` / `ANIM_hide` | `show` / `hide` datarefs on the **innermost bone of the block**, so the rule scopes to that subtree |
 | `ATTR_draw_disable` | a material clone with *Draw Objects With This Material* off |
+| `ATTR_blend` / `ATTR_no_blend [ratio]` / `ATTR_shadow_blend ratio` | the material's *Blend Mode* and *Alpha Cutoff Ratio* |
+| `ATTR_shadow` / `ATTR_no_shadow` | the material's *Shadow Local* |
+| `ATTR_poly_os n` / `ATTR_no_poly_os` | the material's *Polygon Offset* |
 | `ATTR_solid_camera` | the material's *Camera Collision* |
 | `ATTR_cockpit*` | the material's *Cockpit Feature* (`Panel Texture` / `Cockpit Device`) plus the layer's *Panel Texture Mode*; `COCKPIT_REGION` becomes the layer's region table |
 | `ATTR_light_level` | the **object's** *X-Plane > Light Levels > Override Light Level* (value1 / value2 / dataref) |
@@ -53,6 +56,16 @@ Two of those are worth the extra sentence they get:
 
 Material clones are shared: batches that ask for the same state combination get
 one clone, not one each.
+
+* **Blending is the one state whose "on" side writes nothing.** X-Plane's
+  default state is blending on (OBJ8 spec: *this is the default* next to
+  `ATTR_blend`), and XP2B's command printer starts out considering `ATTR_blend`
+  already in effect, so a batch with `ATTR_blend` exports with no blend line at
+  all — exactly what a material authored in XP2B from scratch does. The line is
+  written again where it is needed: after a batch that turned blending off or
+  switched it to shadow-only. `ATTR_no_blend 0.3` and `ATTR_shadow_blend 0.75`
+  keep their cutoff ratio (`blendRatio`); leaving it alone would quietly hand
+  X-Plane XP2B's 0.5 default.
 
 * **A manipulator XPlane2Blender would have to rewrite goes out verbatim.** Its
   drag-rotate settings are derived from the bones above the mesh — pivot, axis,

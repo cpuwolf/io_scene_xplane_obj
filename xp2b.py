@@ -176,6 +176,22 @@ def _add_custom_attribute(xplane_group, name, value="", unique=True):
     attr.value = value
 
 
+def _state_args(words):
+    """The arguments of a state line, stopping at a trailing comment.
+
+    OBJ8 allows a trailing comment after any record, and the words after the
+    ``#`` are prose rather than arguments: ``ATTR_no_blend # default cutoff``
+    carries no ratio at all, and ``ATTR_cockpit_region 1 # region one`` has
+    exactly one argument.
+    """
+    args = []
+    for word in words[1:]:
+        if word.startswith("#"):
+            break
+        args.append(word)
+    return args
+
+
 def _new_collection(name):
     coll = bpy.data.collections.new(name)
     return coll
@@ -1604,7 +1620,22 @@ class _Converter(object):
                     continue
                 kw = words[0]
                 if kw in blend:
-                    self._material_set(ob, [("blend_v1000", blend[kw])], kw[:12])
+                    pairs = [("blend_v1000", blend[kw])]
+                    # the ratio is optional: ATTR_no_blend and
+                    # ATTR_shadow_blend alone mean "0.5", the spec default
+                    args = _state_args(words)
+                    if kw != "ATTR_blend" and args:
+                        # the material defaults to 0.5, so dropping the file's
+                        # number silently changes what the sim cuts away
+                        try:
+                            cutoff = float(args[0])
+                        except ValueError:
+                            self.warn("%s: %s cutoff %r is not a number"
+                                      % (ob.name, kw, args[0]))
+                        else:
+                            pairs.append(("blendRatio",
+                                          min(1.0, max(0.0, cutoff))))
+                    self._material_set(ob, pairs, kw[:12])
                 elif kw in flags:
                     field, value = flags[kw]
                     self._material_set(ob, [(field, value)], kw[:12])
@@ -1911,7 +1942,7 @@ class _Converter(object):
                 if not words:
                     continue
                 kw = words[0]
-                args = [w for w in words[1:] if not w.startswith("#")]
+                args = _state_args(words)
                 if kw == "ATTR_no_cockpit":
                     self._material_set(ob, [("cockpit_feature", "none")],
                                        "cockpit")

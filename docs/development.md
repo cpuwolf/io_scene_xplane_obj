@@ -18,6 +18,7 @@ python3 verify/test_anim.py                        # ANIM_* evaluator, no Blende
 python3 verify/test_acf.py                         # .acf -> object paths, no Blender
 
 blender -b --factory-startup --python verify/material_combo_test.py   # combo map, texture + light-level fields, XP2B output
+blender -b --factory-startup --python verify/blend_test.py            # blend mode + alpha cutoff ratio round trip
 blender -b --factory-startup --python verify/check_bones_xp2b.py -- <file.obj>  # animation -> bones -> XP2B
 blender -b --factory-startup --python verify/check_cockpit.py -- <file.obj>     # ATTR_cockpit* -> cockpit feature
 blender -b --factory-startup --python verify/check_placement.py -- <file.obj>   # each batch where the file puts it

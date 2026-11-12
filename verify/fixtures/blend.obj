@@ -1,0 +1,47 @@
+I
+800
+OBJ
+
+# Fixture: blend state, and the alpha cutoff ratio that rides with two of the
+# three lines.  Five quads, one texture, five batches:
+#   quad A - ATTR_blend                -> blend on (X-Plane's default state)
+#   quad B - ATTR_no_blend 0.3         -> alpha testing, cutoff 0.3 (with a
+#                                         trailing comment, which is legal)
+#   quad C - ATTR_blend                -> back to blend, must be re-declared
+#   quad D - ATTR_shadow_blend 0.75    -> blend + alpha test for shadows, 0.75
+#   quad E - ATTR_no_blend             -> no ratio: 0.5, the spec default; a
+#                                         comment-only argument is not a cutoff
+TEXTURE	mini.png
+POINT_COUNTS	20 0 0 10
+
+VT	0	0	0	0	1	0	0	0
+VT	1	0	0	0	1	0	1	0
+VT	1	0	1	0	1	0	1	1
+VT	0	0	1	0	1	0	0	1
+VT	2	0	0	0	1	0	0	0
+VT	3	0	0	0	1	0	1	0
+VT	3	0	1	0	1	0	1	1
+VT	2	0	1	0	1	0	0	1
+VT	4	0	0	0	1	0	0	0
+VT	5	0	0	0	1	0	1	0
+VT	5	0	1	0	1	0	1	1
+VT	4	0	1	0	1	0	0	1
+VT	6	0	0	0	1	0	0	0
+VT	7	0	0	0	1	0	1	0
+VT	7	0	1	0	1	0	1	1
+VT	6	0	1	0	1	0	0	1
+VT	8	0	0	0	1	0	0	0
+VT	9	0	0	0	1	0	1	0
+VT	9	0	1	0	1	0	1	1
+VT	8	0	1	0	1	0	0	1
+IDX	0 1 2 0 2 3 4 5 6 4 6 7 8 9 10 8 10 11 12 13 14 12 14 15 16 17 18 16 18 19
+ATTR_blend
+TRIS	0	6
+ATTR_no_blend	0.3	# tight cutout on the fence
+TRIS	6	6
+ATTR_blend
+TRIS	12	6
+ATTR_shadow_blend	0.75
+TRIS	18	6
+ATTR_no_blend	# no ratio, the spec default 0.5
+TRIS	24	6

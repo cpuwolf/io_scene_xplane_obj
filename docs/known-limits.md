@@ -32,6 +32,10 @@
   taller than the bone lifts) still reaches the exported file — it is carried
   verbatim — but it is a raw custom attribute on that object rather than editable
   manipulator fields in the N-panel. Editing it means editing the attribute.
+* An explicit `ATTR_blend` comes back as no line at all, because blending on is
+  X-Plane's default state and the exporter only writes state it has to change
+  (see [the bridge](xp2b-bridge.md)). The mode itself survives: it is written
+  again after any batch that turned blending off.
 * The exporter writes from the object tree, not from the file's original text:
   it is XPlane2Blender's writer (bundled, see [CREDITS](../CREDITS.md)), so a
   batch's geometry comes out as the scene has it, not as the bytes were.
