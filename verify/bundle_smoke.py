@@ -84,7 +84,9 @@ try:
     spec.loader.exec_module(mod)
     mod.register()
 
-    from xp8_smoke import xp2b as XB
+    # `xp8_smoke` is the unpacked package, registered in sys.modules a few
+    # lines up - the name exists only at run time, so nothing resolves it.
+    from xp8_smoke import xp2b as XB  # pyright: ignore[reportMissingImports]
     if not XB.available():
         fail("the bundled exporter did not register (Collection has no .xplane)")
     if not XB.bone_support():

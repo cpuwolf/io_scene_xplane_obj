@@ -1,0 +1,22 @@
+{
+  "include": [
+    "*.py",
+    "verify"
+  ],
+  "exclude": [
+    "vendor",
+    "dist",
+    "wheels",
+    "typings",
+    "__pycache__"
+  ],
+  "stubPath": "typings",
+  "extraPaths": [
+    "..",
+    "vendor/XPlane2Blender"
+  ],
+  "pythonVersion": "3.13",
+  "typeCheckingMode": "off",
+  "reportInvalidTypeForm": "none",
+  "reportMissingModuleSource": "none"
+}
