@@ -615,6 +615,24 @@ class FILE_HANDLER_OT_xplane_acf(bpy.types.FileHandler):
 
 # ---------------------------------------------------------------------------
 # export
+
+
+def _find_header(obj):
+    """Walk up to the header Empty that owns `obj`.
+
+    Every command the import kept hangs off one header Empty per source file
+    (`XM.ROLE_HEADER`), and a part is up to 32 parents below it - the panel, the
+    dataref picker and "convert selection" all need that owner, not the part.
+    """
+    hops = 0
+    while obj is not None and hops < 32:
+        if XM.is_header(obj):
+            return obj
+        obj = obj.parent
+        hops += 1
+    return None
+
+
 @_add
 class OBJECT_OT_xp8_anim_rig(bpy.types.Operator):
     """Give the selected part an animation rig, so it can be keyframed here"""

@@ -80,6 +80,28 @@ jobs:
           blender --factory-startup --command extension validate dist/*.zip
           unzip -l dist/*.zip
 
+      - name: No module uses a name it never binds
+        run: |
+          set -euo pipefail
+          # 10586b6 deleted `_find_header` and left four call sites; every gate
+          # here stayed green for six days because none of them touches the
+          # N-panel draw, the dataref picker or "Convert selection".  A NameError
+          # is invisible to `compileall` and to `extension validate`, so resolve
+          # the names: this fails on the zip that is about to be uploaded.
+          python3 verify/namecheck.py dist/*.zip
+
+      - name: The UI paths in the panel, picker and operators run
+        run: |
+          set -euo pipefail
+          # The four `_find_header` call sites are background-reachable when
+          # they are called directly (the panel draw with a layout stub, the
+          # EnumProperty callback, the two operators), so they can be graded
+          # here instead of by whoever clicks them first.
+          out=$(blender -b --factory-startup --python verify/find_header_test.py -- \
+                  verify/fixtures/nested.obj 2>&1)
+          echo "$out"
+          echo "$out" | grep -q "^RESULT: PASS"
+
       - name: The package actually registers and exports
         run: |
           set -euo pipefail

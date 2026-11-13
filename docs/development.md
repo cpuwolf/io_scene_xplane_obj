@@ -16,6 +16,7 @@ debugged without starting Blender.
 python3 verify/test_fixture.py                     # pinned parser expectations
 python3 verify/test_anim.py                        # ANIM_* evaluator, no Blender
 python3 verify/test_acf.py                         # .acf -> object paths, no Blender
+python3 verify/namecheck.py [dist/<id>-<ver>.zip]   # no module uses a name it never binds
 
 blender -b --factory-startup --python verify/material_combo_test.py   # combo map, texture + light-level fields, XP2B output
 blender -b --factory-startup --python verify/blend_test.py            # blend mode + alpha cutoff ratio round trip
@@ -26,6 +27,7 @@ blender -b --factory-startup --python verify/check_placement.py -- <file.obj>   
 blender -b --factory-startup --python verify/check_where_anim.py -- <file.obj>  # which block a batch hangs under
 blender -b --factory-startup --python verify/check_scale.py -- <file.obj>       # measured against the real aircraft
 blender -b --factory-startup --python verify/xp2b_convert.py -- <file.obj>      # just the bridge, then print the warnings
+blender -b --factory-startup --python verify/find_header_test.py -- verify/fixtures/nested.obj  # the four _find_header call sites: panel draw, dataref picker, both operators
 blender -b --factory-startup --python verify/acf_import.py -- <file.acf>        # one aircraft, every object it attaches
 blender -b --factory-startup --python verify/export_snapshot.py -- <in.obj> <out.txt>  # one file's export text, to diff before/after
 ```
@@ -34,6 +36,14 @@ blender -b --factory-startup --python verify/export_snapshot.py -- <in.obj> <out
 editing rather than whatever is installed; add `--no-xp2b` to skip the
 conversion (it then also checks that the import says *why* there is no exportable
 collection instead of failing quietly).
+
+**`-b` never draws, so anything that only runs on a redraw is untested here.**
+A panel's `draw()`, an `EnumProperty` items callback and a menu's `poll()` are
+only reached by the UI: background mode reports "26 tests green" while the
+sidebar raises `NameError` on every repaint. So a UI addition needs a test that
+calls it directly - `find_header_test.py` hands `draw()` a stub `self.layout`
+and a stub context, and calls the enum callback and the operators by hand. That
+is the only shape in which these paths can be graded before a user clicks them.
 
 **The `.acf` import is modal, and `-b` cannot run a modal.** Background mode has a
 `Window` object but no event loop, so `context.window is None` is False there and a
