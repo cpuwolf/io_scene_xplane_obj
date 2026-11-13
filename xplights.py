@@ -134,9 +134,10 @@ class Spec(object):
     """What one light line says about the lamp, in Blender terms."""
 
     __slots__ = ("kind", "family", "colour", "energy", "cone", "direction",
-                 "radius")
+                 "radius", "index", "size", "candela", "freq", "phase")
 
-    def __init__(self, kind, family, colour, energy, cone, direction, radius):
+    def __init__(self, kind, family, colour, energy, cone, direction, radius,
+                 index=None, size=None, candela=None, freq=None, phase=None):
         self.kind = kind
         self.family = family
         self.colour = colour
@@ -144,6 +145,14 @@ class Spec(object):
         self.cone = cone            # radians, None for an omnidirectional light
         self.direction = direction   # X-Plane space, None when the line is omni
         self.radius = radius
+        # the same numbers again, for XPlane2Blender's *Automatic* light fields
+        # (see apply): the line's own text stays the source of truth in Manual
+        # Param mode, but these are what Automatic reads instead of the text
+        self.index = index
+        self.size = size
+        self.candela = candela
+        self.freq = freq
+        self.phase = phase
 
     def __repr__(self):
         return ("Spec(kind=%r, energy=%.2f, cone=%r, direction=%r)"
@@ -218,7 +227,9 @@ def describe(name, params):
     radius = (SOFT_SIZE_PER_METRE * size) if size and size > 0.0 \
         else DEFAULT_SOFT_SIZE
     return Spec('SPOT' if cone is not None else 'POINT', family, colour,
-                energy, cone, direction, radius)
+                energy, cone, direction, radius, index=vals.get("INDEX"),
+                size=size, candela=candela, freq=vals.get("FREQ"),
+                phase=vals.get("PHASE"))
 
 
 def apply(data, spec):
@@ -230,25 +241,52 @@ def apply(data, spec):
     if spec.cone is not None:
         data.spot_size = spec.cone
         data.spot_blend = SPOT_BLEND
+    # XP2B's *Automatic* light type regenerates the whole line from these fields
+    # and ignores the parameters text, so an imported light switched from Manual
+    # Param to Automatic would otherwise fall back to the UI defaults (20000 cd,
+    # size 1.0, index 0).  Filling them here is what makes the two authoring
+    # modes the same light: the aim and the cone already come from the line, so
+    # Automatic derives the same DX DY DZ and WIDTH back out of the object.
+    # Nothing reads these in Manual Param mode, so the export does not move.
+    xp = data.xplane
+    try:
+        if spec.index is not None:
+            xp.param_index = int(spec.index)
+        if spec.size is not None:
+            xp.param_size = float(spec.size)
+        if spec.candela is not None:
+            xp.param_intensity_new = float(spec.candela)
+        if spec.freq is not None:
+            xp.param_freq = float(spec.freq)
+        if spec.phase is not None:
+            xp.param_phase = float(spec.phase)
+    except (AttributeError, TypeError, ValueError):
+        pass
     return data
 
 
 def aim(ob, direction, world=None):
     """Point the object's local -Z along the line's own direction.
 
-    The parent (a bone inside an ANIM block, or the world-center Empty) is
-    already in place, so the rotation is applied as a world matrix and Blender
-    works out the local one - which is the same space XP2B's autocorrect reads.
-    `world` is the object's matrix *before* any of this, passed in by the caller
-    because assigning matrix_world invalidates the depsgraph and a re-read
-    inside the same batch is stale.
+    XP2B compares this against `bakeMatrix.to_3x3() @ (0,0,-1)`, where bake is
+    `anchor_post_animation.inverted() @ world`.  Aiming in *world* space is the
+    variant that measures clean: working the parent's rotation in as well made
+    F4D_Wings go from 0 to 12 invented ANIM_rotate lines, so the bake matrix is
+    not simply "the parent's rotation" and this is the best of the two.
+
+    Known limit: a light under a block whose *keyed* rotation moves it can still
+    gain a static ANIM_rotate the source did not have - measured 3 of 16 in
+    Cessna 172 lights.obj and 9 of 35 in MD-82 lights.obj, 0 in F4D_Wings and in
+    the C172 cockpit.  `world` is the object's matrix before any of this, passed
+    in by the caller because assigning matrix_world invalidates the depsgraph
+    and a re-read inside the same batch is stale.
     """
     from mathutils import Matrix, Vector
 
+    base = world if world is not None else ob.matrix_world
     target = Vector((direction[0], -direction[2], direction[1]))  # vec_x_to_b
     if target.length < 1e-9:
         return False
     quat = target.normalized().to_track_quat('-Z', 'Y')
-    where = (world if world is not None else ob.matrix_world).translation.copy()
-    ob.matrix_world = Matrix.Translation(where) @ quat.to_matrix().to_4x4()
+    ob.matrix_world = Matrix.Translation(base.translation) @ quat.to_matrix().to_4x4()
     return True
