@@ -50,6 +50,7 @@ from mathutils import Matrix, Vector
 
 from . import xpanim as XA
 from . import objcodec as OC
+from . import xplights as XL
 from . import xpmesh as XM
 from .xpanim import CMD_ROTATE, CMD_ROTATE_KEYS, CMD_SHOW, CMD_HIDE, \
     CMD_TRANS, CMD_TRANS_KEYS
@@ -1197,12 +1198,17 @@ class _Converter(object):
             pass
 
     def _make_light(self, words, coll):
-        """One LIGHT_* line -> one Blender light object.
+        """One LIGHT_* line -> one Blender light object, plus its Spec.
 
         XPlane2Blender exports lights from light *objects*: the position comes
         from the object and the rest of the line goes into the light data
         verbatim, so the argument text is kept as-is instead of being parsed
         into fields (every light name has its own parameter list).
+
+        The Spec (`xplights.describe`) is the *preview* half: colour, power,
+        cone and the direction the lamp faces.  It never touches `params`, so it
+        cannot reach the export; the caller aims the object once the hierarchy
+        is built.
         """
         kw = words[0]
         if kw == "LIGHT_PARAM":
@@ -1237,7 +1243,8 @@ class _Converter(object):
         else:
             return None
 
-        data = bpy.data.lights.new(name, 'POINT')
+        spec = XL.describe(name, params) if light_type == "param" else None
+        data = bpy.data.lights.new(name, spec.kind if spec else 'POINT')
         try:
             data.xplane.type = light_type
             data.xplane.name = name
@@ -1245,11 +1252,15 @@ class _Converter(object):
         except (AttributeError, TypeError) as exc:
             self.warn("%s: could not configure the light: %s" % (name, exc))
             return None
+        if spec is not None:
+            # preview only: XP2B echoes `params` verbatim and reads neither the
+            # colour nor the power of a param light (xplights.py)
+            XL.apply(data, spec)
         ob = bpy.data.objects.new(name, data)
         ob.location = _xp_to_bl(pos)
         ob.rotation_mode = 'XYZ'
         coll.objects.link(ob)
-        return ob
+        return ob, spec
 
     def _build_lights(self, obj8, coll, anchors=None):
         """Turn every LIGHT_* line into a light object; returns how many.
@@ -1262,6 +1273,11 @@ class _Converter(object):
         geometry does.  Leaving them all at the collection root exports every
         light outside the ANIM block it came from, and a nav light driven by
         ``sim/flightmodel2/wing/rudder1_deg`` then stops following the rudder.
+
+        Aiming happens at the end, after one view-layer update: the rotation is
+        set as a world matrix, so it has to be computed against the parent bone
+        that is really there (xplights.aim), and a stale translation read from
+        the depsgraph would move the light in the export.
         """
         by_begin = {}
         for blk in getattr(self.anim, "blocks", None) or []:
@@ -1270,6 +1286,8 @@ class _Converter(object):
         stack = []
         made = 0
         skipped = 0
+        unknown = set()
+        aiming = []
         for ev_index, (kind, payload) in enumerate(obj8.events):
             if kind == OC.EV_ANIM_BEGIN:
                 stack.append(by_begin.get(ev_index))
@@ -1283,10 +1301,13 @@ class _Converter(object):
             words = payload.split()
             if not words or not words[0].startswith("LIGHT"):
                 continue
-            ob = self._make_light(words, coll)
-            if ob is None:
+            made_light = self._make_light(words, coll)
+            if made_light is None:
                 skipped += 1
                 continue
+            ob, spec = made_light
+            if spec is None and words[0] == "LIGHT_PARAM" and len(words) > 1:
+                unknown.add(words[1])
             made += 1
             anchor = None
             if anchors:
@@ -1298,6 +1319,29 @@ class _Converter(object):
                 anchor.attach(ob)
             elif getattr(self, "root", None) is not None:
                 _Anchor(obj=self.root).attach(ob)
+            if spec is not None and spec.direction is not None:
+                aiming.append((ob, spec))
+        if aiming:
+            # Snapshot every world matrix BEFORE touching anything, then aim:
+            # assigning one object's matrix_world invalidates the depsgraph, so
+            # a read inside the same loop hands back a stale matrix - and a
+            # stale read means the light keeps a wrong translation and XP2B
+            # writes both a moved light and an ANIM_rotate to "fix" its aim.
+            bpy.context.view_layer.update()
+            placed = [(ob, spec.direction, ob.matrix_world.copy())
+                      for ob, spec in aiming]
+            for ob, direction, world in placed:
+                XL.aim(ob, direction, world)
+        if unknown:
+            # No table row means no candidate mapping, so nothing was applied
+            # and the light keeps Blender's defaults.  Report the names instead
+            # of guessing an interpretation of somebody's custom lights.txt.
+            names = sorted(unknown)
+            self.warn("%s: no light parameters known for %s%s; those lights "
+                      "keep Blender's default colour and power"
+                      % (coll.xplane.layer.name, ", ".join(names[:6]),
+                         " and %d more" % (len(names) - 6)
+                         if len(names) > 6 else ""))
         if skipped:
             self.warn("%s: %d light line(s) could not be converted"
                       % (coll.xplane.layer.name, skipped))

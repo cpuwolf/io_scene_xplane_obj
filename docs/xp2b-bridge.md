@@ -30,7 +30,7 @@ lights, LODs) is what it is good at — nothing here writes a `.obj` itself.
 | `TEXTURE_MAP normal` / `material_gloss` / `gloss` | the layer's 12.0+ Normal / Material-Gloss / Gloss fields |
 | `NORMAL_METALNESS`, `BLEND_GLASS` | the layer's *Normal Metalness* and *Blend Glass* |
 | `ATTR_shiny_rat` | the material's specularity |
-| `LIGHT_PARAM` / `LIGHT_NAMED` | a light object (position from the object, the parameter text verbatim) |
+| `LIGHT_PARAM` / `LIGHT_NAMED` | a light object (position from the object, the parameter text verbatim) *plus* a preview-only colour / power / cone / aim read from that text; the aim is the one field XP2B compares against, so it is set to the line's own direction |
 | `ATTR_LOD` | the layer's LOD levels, plus the `lod[i]` flag on each batch |
 | `PARTICLE_SYSTEM` | the **layer's** *Particle System File* |
 | `EMITTER` | an Empty with XP2B's *Particle Emitter* type (name, array index, position and Euler angles) |

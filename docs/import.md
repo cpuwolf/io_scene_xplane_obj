@@ -85,6 +85,39 @@ The objects come in at their own origin, exactly as if you had imported the
 * `LINES` come in read-only; `LIGHT_PARAM` / `LIGHT_NAMED` primitives are kept as
   raw commands in the file text (see [known limits](known-limits.md)).
 
+## Lights
+
+A `LIGHT_PARAM` line becomes a **Blender light that looks like the lamp**, not a
+white 10 W point: the parameters are read through `xplights.py` and the tint,
+power, cone and aim come from them (`R G B` → colour, `INTENSITY` in candela or
+`SIZE` in metres → power, `WIDTH` = cos(half cone) → `spot_size`, `DX DY DZ` →
+where the object's −Z points).
+
+None of that reaches the export. XP2B writes a param light as
+`LIGHT_PARAM <name> <x> <y> <z> <params verbatim>` and reads neither the colour
+nor the power; what it *does* read is the object's aim, and only to correct it:
+a directional light whose Blender direction disagrees with `DX DY DZ` gets
+wrapped in a static `ANIM_rotate`. So the aim is set to exactly the direction the
+line already names, the correction angle is zero, and the file comes back
+byte-identical — `verify/lights_test.py` is the gate for that, and
+`verify/export_snapshot.py -- <in.obj> <out.txt>` is how to diff a real aircraft.
+
+Two deliberate choices:
+
+* a **billboard** (`_bb`, `_core`, `_glow`, `_flare`, `_size`, `_flash`, `_rotate`,
+  `_strobe`) is a glow quad, not a lamp, so it imports with **0 W**. The paired
+  spill at the same position is the thing that lights the scene; giving both
+  power doubles every light on the aircraft.
+* a light name with no row in `xplights.SPECS` (a custom `lights.txt` name, e.g.
+  `spot_params_sp`) is **not guessed**: it keeps Blender's defaults and the
+  import reports the names once, per file.
+
+Brightness is a display mapping, not photometry — read the constants at the top of
+`xplights.py` if the imported aircraft looks too dim or too hot. Caveat: a file whose `INTENSITY` carries X-Plane 12's `cd` suffix (`300000cd`)
+cannot be exported at all today, because XP2B's param validation runs `float()` on
+every token; that is not specific to this bridge (any import of such a file hits
+it) and it is unchanged by anything here.
+
 ## Materials
 
 The texture set from the file is used twice, on purpose:

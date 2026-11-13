@@ -19,6 +19,7 @@ python3 verify/test_acf.py                         # .acf -> object paths, no Bl
 
 blender -b --factory-startup --python verify/material_combo_test.py   # combo map, texture + light-level fields, XP2B output
 blender -b --factory-startup --python verify/blend_test.py            # blend mode + alpha cutoff ratio round trip
+blender -b --factory-startup --python verify/lights_test.py           # light colour/power/cone/aim + the export it must not change
 blender -b --factory-startup --python verify/check_bones_xp2b.py -- <file.obj>  # animation -> bones -> XP2B
 blender -b --factory-startup --python verify/check_cockpit.py -- <file.obj>     # ATTR_cockpit* -> cockpit feature
 blender -b --factory-startup --python verify/check_placement.py -- <file.obj>   # each batch where the file puts it
@@ -26,6 +27,7 @@ blender -b --factory-startup --python verify/check_where_anim.py -- <file.obj>  
 blender -b --factory-startup --python verify/check_scale.py -- <file.obj>       # measured against the real aircraft
 blender -b --factory-startup --python verify/xp2b_convert.py -- <file.obj>      # just the bridge, then print the warnings
 blender -b --factory-startup --python verify/acf_import.py -- <file.acf>        # one aircraft, every object it attaches
+blender -b --factory-startup --python verify/export_snapshot.py -- <in.obj> <out.txt>  # one file's export text, to diff before/after
 ```
 
 `acf_import.py` loads this working tree by path, so it grades the code you are
