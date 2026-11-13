@@ -171,6 +171,56 @@ for words in source:
               "%s: %d parameters written, %d in the file"
               % (words[1], len(got), len(words)))
 
+# --- cockpit lights follow the scene sliders, like the sim's brightness --------
+# `airplane_panel_sp` / `airplane_inst_sp` are driven by
+# sim/cockpit2/switches/panel_brightness_ratio[i] and its instrument twin, so the
+# imported cockpit gets the same knob: a scene property per index, and the
+# light's energy is that value times its base power.  Preview only - the export
+# must not move by a single byte when a slider is at 0.
+panel = lights.get("airplane_panel_sp")
+if check(panel is not None, "no airplane_panel_sp object"):
+    slider = "xp8_panel_1"                      # the fixture's INDEX is 1
+    check(slider in bpy.context.scene,
+          "no %r scene slider (Scene Properties > Custom Properties)" % slider)
+    check(bpy.context.scene.get(slider) == 1.0,
+          "%s defaults to %r, want 1.0" % (slider, bpy.context.scene.get(slider)))
+    drivers = (panel.data.animation_data.drivers
+               if panel.data.animation_data else [])
+    if check(len(drivers) == 1, "%s has %d drivers, want 1"
+             % (panel.name, len(drivers))):
+        driver = drivers[0].driver
+        var = driver.variables[0]
+        check(driver.is_valid and driver.is_simple_expression,
+              "%s: driver is not a simple expression (%r)"
+              % (panel.name, driver.expression))
+        check(var.targets[0].data_path == '["%s"]' % slider,
+              "%s: driver reads %r, want the %s slider"
+              % (panel.name, var.targets[0].data_path, slider))
+
+    def energy_now():
+        dg = bpy.context.evaluated_depsgraph_get()
+        return panel.evaluated_get(dg).data.energy
+
+    full = energy_now()
+    bpy.context.scene[slider] = 0.25
+    bpy.context.scene.update_tag()      # what a UI edit does; a plain python
+    bpy.context.view_layer.update()     # assignment does not tag the ID
+    quarter = energy_now()
+    check(abs(quarter - full * 0.25) < 1e-4,
+          "%s: slider at 0.25 gives %.3f W, want %.3f (full is %.3f)"
+          % (panel.name, quarter, full * 0.25, full))
+
+    logger.clearMessages()
+    files = XF.createFilesFromBlenderRootObjects(bpy.context.scene,
+                                                 bpy.context.view_layer)
+    dimmed = files[0].write() if files else ""
+    check(dimmed == text,
+          "the export changed when the %s slider moved: drivers must be "
+          "preview only" % slider)
+    bpy.context.scene[slider] = 1.0
+    bpy.context.scene.update_tag()
+    bpy.context.view_layer.update()
+
 # ---------------------------------------------------------------------------
 # A file that declares ATTR_LOD: draw commands only reach the export when the
 # object carries its bucket AND `override_lods`, and a light is a draw command

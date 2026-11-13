@@ -112,6 +112,15 @@ Two deliberate choices:
   `spot_params_sp`) is **not guessed**: it keeps Blender's defaults and the
   import reports the names once, per file.
 
+Cockpit lights dim the way the sim's do. `airplane_panel_sp` and
+`airplane_inst_sp` carry an `INDEX`, so each one gets a driver on its power that
+reads a scene property - `xp8_panel_0` … `xp8_panel_3` and `xp8_inst_0` …
+`xp8_inst_3` under *Scene Properties > Custom Properties*, all defaulting to
+1.0. Set one to 0 and that bank goes dark in the viewport and in renders; the
+export does not move, because a parameter light's power is never written. From a
+script, call `scene.update_tag()` after writing the property - a plain
+`scene[key] = x` assignment does not re-evaluate the driver.
+
 Brightness is a display mapping, not photometry — read the constants at the top of
 `xplights.py` if the imported aircraft looks too dim or too hot.
 

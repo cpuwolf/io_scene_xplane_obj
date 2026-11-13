@@ -1338,6 +1338,7 @@ class _Converter(object):
         skipped = 0
         unknown = set()
         aiming = []
+        dimmers = []
         for ev_index, (kind, payload) in enumerate(obj8.events):
             if kind == OC.EV_ANIM_BEGIN:
                 stack.append(by_begin.get(ev_index))
@@ -1375,6 +1376,9 @@ class _Converter(object):
                 _Anchor(obj=self.root).attach(ob)
             if spec is not None and spec.direction is not None:
                 aiming.append((ob, spec))
+            if spec is not None and spec.family == "cockpit" \
+                    and spec.index is not None:
+                dimmers.append((ob, spec, words[1]))
         if aiming:
             # Snapshot every world matrix BEFORE touching anything, then aim:
             # assigning one object's matrix_world invalidates the depsgraph, so
@@ -1386,6 +1390,8 @@ class _Converter(object):
                       for ob, spec in aiming]
             for ob, direction, world in placed:
                 XL.aim(ob, direction, world)
+        for ob, spec, name in dimmers:
+            XL.bind_dimmer(ob, spec, bpy.context.scene, name)
         if unknown:
             # No table row means no candidate mapping, so nothing was applied
             # and the light keeps Blender's defaults.  Report the names instead

@@ -42,6 +42,13 @@ import math
 REFERENCE_CD = 250.0        # a navigation light, the dimmest real case
 REFERENCE_W = 5.0           # watts that reads as "on" for that light
 WATTS_PER_METRE = 12.0      # v11 spills: SIZE is reach in metres
+MAX_SPILL_WATTS = 2000.0    # ... but a reach is not a power: cap the blowups
+COCKPIT_WATTS = 10.0        # a panel/instrument flood lights a 0.5 m panel, and
+                            # its SIZE (0.25 m .. 1000 m across the fleet, where
+                            # the Baron's cabin says 1000 to mean "everywhere")
+                            # is the reach until the spill goes dark, not how
+                            # bright it is - scaling by it made that 12000 W
+MAX_CUTOFF = 500.0          # metres, for the reach that SIZE really means
 BILLBOARD_WATTS = 0.0       # a billboard is a glow quad, not a lamp: the
                             # paired _pm/_sp at the same position is the light
 FALLBACK_WATTS = 2.0        # a lamp whose parameters carry neither number
@@ -210,10 +217,12 @@ def describe(name, params):
     candela, size = vals.get("INTENSITY"), vals.get("SIZE")
     if family == "billboard":
         energy = BILLBOARD_WATTS
+    elif family == "cockpit":
+        energy = COCKPIT_WATTS
     elif candela is not None and candela > 0.0:
         energy = REFERENCE_W * math.sqrt(candela / REFERENCE_CD)
     elif size is not None and size > 0.0:
-        energy = WATTS_PER_METRE * size
+        energy = min(MAX_SPILL_WATTS, WATTS_PER_METRE * size)
     else:
         energy = FALLBACK_WATTS
 
@@ -248,6 +257,14 @@ def apply(data, spec):
     # modes the same light: the aim and the cone already come from the line, so
     # Automatic derives the same DX DY DZ and WIDTH back out of the object.
     # Nothing reads these in Manual Param mode, so the export does not move.
+    if spec.family == "cockpit" and spec.size:
+        # a spill's SIZE is a distance, so give it to Blender as one instead of
+        # inventing a power out of it
+        try:
+            data.use_custom_distance = True
+            data.cutoff_distance = min(spec.size, MAX_CUTOFF)
+        except AttributeError:
+            pass
     xp = data.xplane
     try:
         if spec.index is not None:
@@ -263,6 +280,45 @@ def apply(data, spec):
     except (AttributeError, TypeError, ValueError):
         pass
     return data
+
+
+def bind_dimmer(ob, spec, scene, name):
+    """Drive a cockpit light's power from a scene slider, the way the sim does.
+
+    `airplane_panel_sp` is the `sim/cockpit2/switches/panel_brightness_ratio[i]`
+    family and `airplane_inst_sp` the instrument one, so an imported cockpit
+    renders at one brightness and nothing can turn it down.  Each index gets a
+    scene property (`xp8_panel_0` .. `xp8_inst_3`) and the light's energy is that
+    value times the power `describe` worked out - preview only, the exporter
+    never reads a param light's energy.
+
+    The expression is a *simple* one on purpose: Blender evaluates those without
+    the "auto run python scripts" permission, so a driver never trips a warning
+    on a machine that has python auto-execution disabled.
+    """
+    if spec.family != "cockpit" or spec.index is None:
+        return False
+    channel = "inst" if "inst" in name else "panel"
+    key = "xp8_%s_%d" % (channel, int(spec.index))
+    if key not in scene:
+        scene[key] = 1.0
+    data = ob.data
+    try:
+        data.driver_remove("energy")
+        curve = data.driver_add("energy")
+        driver = curve.driver
+        driver.type = 'SCRIPTED'
+        var = driver.variables.new()
+        var.name = "brightness"
+        var.type = 'SINGLE_PROP'
+        target = var.targets[0]
+        target.id_type = 'SCENE'
+        target.id = scene
+        target.data_path = '["%s"]' % key
+        driver.expression = "brightness * %.4f" % float(spec.energy)
+    except (AttributeError, TypeError) as exc:      # noqa: F841 - best effort
+        return False
+    return True
 
 
 def aim(ob, direction, world=None):
