@@ -18,3 +18,7 @@ verify/tmp/
 
 # the exporter is a build artifact: scripts/build_wheel.py regenerates it
 wheels/*.whl
+
+# bpy stubs for the editor: `pip install fake-bpy-module-5.2` provides the
+# same files, and pyrightconfig.json works with or without them here
+typings/
