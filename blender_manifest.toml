@@ -6,7 +6,7 @@ schema_version = "1.0.0"
 # extensions/<repo>/io_scene_xplane_obj/.
 
 id = "io_scene_xplane_obj"
-version = "0.12.5"
+version = "0.12.6"
 name = "X-Plane OBJ8 Import and Export"
 tagline = "Import and export X-Plane .obj and .acf in one install"
 maintainer = "Wei Shuai"
@@ -69,6 +69,9 @@ paths_exclude_pattern = [
   "/scripts/",
   "/docs/",     # the README links to these on GitHub; the add-on does not read
                 # them, and the extension platform renders only the README
+  "/branding/",  # store listing images only: the add-on never reads them, and
+                 # the platform re-hosts them itself
+  "/.gitattributes",
   "/dev-link.sh",
   "/*.zip",
   "/*.gif",     # the README demos, ~6 MB of them: GitHub can have them, the

@@ -210,6 +210,15 @@ def main():
 
     os.makedirs(OUT_DIR, exist_ok=True)
     out = os.path.join(OUT_DIR, "%s-%s-%s.whl" % (NAME, VERSION, TAG))
+    # `extension build` packs the whole wheels/ directory, not just the file
+    # `wheels = [...]` names, so an older wheel left behind ships as dead weight
+    # (post1 + post2 was 656 KB of a 796 KB zip) and looks like two versions of
+    # the exporter in one package.
+    for stale in sorted(os.listdir(OUT_DIR)):
+        if stale.startswith(NAME + "-") and stale.endswith(".whl") \
+                and stale != os.path.basename(out):
+            os.remove(os.path.join(OUT_DIR, stale))
+            print("build_wheel: removed stale %s" % stale)
     tmp = out + ".tmp"
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zf:
         for arcname, data in entries:
