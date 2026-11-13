@@ -171,6 +171,54 @@ for words in source:
               "%s: %d parameters written, %d in the file"
               % (words[1], len(got), len(words)))
 
+# ---------------------------------------------------------------------------
+# A file that declares ATTR_LOD: draw commands only reach the export when the
+# object carries its bucket AND `override_lods`, and a light is a draw command
+# like any other.  Both used to be dropped, leaving vertices and no draws.
+# ---------------------------------------------------------------------------
+for ob in list(bpy.data.objects):
+    bpy.data.objects.remove(ob, do_unlink=True)
+for coll in list(bpy.data.collections):
+    bpy.data.collections.remove(coll)
+for mat in list(bpy.data.materials):
+    bpy.data.materials.remove(mat)
+
+LOD_FIXTURE = os.path.join(REPO, "verify", "fixtures", "lod_lights.obj")
+bpy.ops.import_scene.xplane_obj(filepath=LOD_FIXTURE)
+
+layer = None
+for coll in bpy.data.collections:
+    if coll.xplane.is_exportable_collection:
+        layer = coll.xplane.layer
+check(layer is not None, "the LOD fixture produced no exportable collection")
+if layer is not None:
+    check(layer.lods == '2', "layer lods is %r, want '2'" % layer.lods)
+
+for name, bucket in (("airplane_landing_sp", 0), ("airplane_nav_bb", 1)):
+    ob = bpy.data.objects.get(name)
+    if not check(ob is not None, "%s missing from the LOD fixture" % name):
+        continue
+    check(ob.xplane.override_lods, "%s: override_lods is off, XP2B then ignores "
+          "its lod flags and drops it" % name)
+    check(tuple(ob.xplane.lod) == tuple(i == bucket for i in range(4)),
+          "%s: lod flags are %s, want bucket %d only"
+          % (name, tuple(ob.xplane.lod), bucket))
+
+logger.clearMessages()
+files = XF.createFilesFromBlenderRootObjects(bpy.context.scene, bpy.context.view_layer)
+text = files[0].write() if files else ""
+for m in logger.messages:
+    print("XP2B %s: %s" % (m["type"].upper(), m["message"]))
+draws = [l for l in text.splitlines() if l.strip().startswith("TRIS")]
+lights_out = [l for l in text.splitlines() if "LIGHT_PARAM" in l]
+check(len(draws) == 1, "the LOD fixture exported %d TRIS, want 1" % len(draws))
+check(len(lights_out) == 2,
+      "the LOD fixture exported %d light lines, want 2 (one per bucket, no "
+      "duplicates)" % len(lights_out))
+check(text.count("ATTR_LOD") == 2,
+      "the LOD fixture exported %d ATTR_LOD lines, want 2"
+      % text.count("ATTR_LOD"))
+
 print("\nRESULT: %s" % ("PASS" if not fails else "FAIL (%d)" % len(fails)))
 for f in fails:
     print(" - %s" % f)

@@ -48,7 +48,7 @@ BASE_VERSION = "4.5.0"          # what upstream bl_info declares
 # edit to PATCHES.  Blender keys the extracted copy by the dist-info directory
 # name, so an unchanged version means the new wheel is never unpacked over the
 # old files and the user keeps running the previous build.
-VERSION = BASE_VERSION + ".post1"
+VERSION = BASE_VERSION + ".post2"
 TAG = "py3-none-any"
 
 # 1980-01-01: the earliest timestamp a zip may carry.  Fixed so the archive is

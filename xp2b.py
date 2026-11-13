@@ -152,6 +152,52 @@ SURFACE_TYPES = ("none", "water", "concrete", "asphalt", "grass", "dirt",
 MAX_LOD_LEVELS = 4
 
 
+class _Lods(object):
+    """Where each draw command sits in a file's ATTR_LOD ranges.
+
+    Filled by ``_Converter._apply_lods`` and consumed by ``tag``: the ranges
+    themselves go on the collection (XPlane2Blender's model), and every object
+    that draws inside one gets the matching bucket.
+    """
+
+    __slots__ = ("ranges", "leaf", "light")
+
+    def __init__(self):
+        self.ranges = []        # [(near, far)], in file order
+        self.leaf = {}          # leaf index -> bucket index
+        self.light = {}         # event index -> bucket index (None = no range yet)
+
+    def widest(self):
+        """The bucket that reaches furthest - the one to use for "always"."""
+        if not self.ranges:
+            return None
+        return max(range(len(self.ranges)), key=lambda i: self.ranges[i][1])
+
+    def tag(self, ob, level):
+        """Mark an object with the bucket it draws in.
+
+        Objects the file puts *outside* every ATTR_LOD range draw at all
+        distances; the widest bucket reproduces that without writing the line
+        once per bucket (which would double every light that sits in two
+        overlapping ranges).
+
+        `override_lods` is not optional: XP2B reads an object's `lod[]` flags
+        only when it is set, and otherwise inherits its parent's buckets - all
+        False - so a file with a single ATTR_LOD used to export with no draws
+        and no lights at all.
+        """
+        if not self.ranges:
+            return
+        bucket = self.widest() if level is None else level
+        if bucket is None:
+            return
+        try:
+            ob.xplane.override_lods = True
+            ob.xplane.lod[bucket] = True
+        except (AttributeError, IndexError, TypeError):
+            pass
+
+
 def _add_custom_attribute(xplane_group, name, value="", unique=True):
     """Add (or update) a XPlane2Blender custom attribute by name.
 
@@ -963,8 +1009,8 @@ class _Converter(object):
         # error, so the global has to land before the emitters are built
         self._apply_particle_system(obj8, coll)
         # ATTR_LOD lives on the collection (XPlane2Blender's model), and every
-        # leaf is tagged with the level it was drawn under
-        leaf_level = self._apply_lods(obj8, coll)
+        # leaf and light is tagged with the level it was drawn under
+        lods = self._apply_lods(obj8, coll)
 
         leaf_objs = json.loads(header.get(XM.PROP_LEAF_OBJS, "[]"))
         leaf_states = json.loads(header.get(XM.PROP_LEAF_STATES, "[]"))
@@ -1004,7 +1050,7 @@ class _Converter(object):
         # Lights need the block anchors, so they are built here rather than with
         # the rest of the file: a light inside an ANIM block has to ride that
         # block's bone, exactly like the geometry
-        lights_made = self._build_lights(obj8, coll, anchors)
+        lights_made = self._build_lights(obj8, coll, anchors, lods)
         # emitters ride their block's bone exactly like lights do, which is why
         # they are built here and not with the rest of the file
         emitters_made = self._build_emitters(obj8, coll, anchors)
@@ -1060,7 +1106,7 @@ class _Converter(object):
                    for cat, raws in state):
                 self._no_draw_material(ob, base)
             self._apply_light_level(ob, state)
-            self._apply_leaf_lod(ob, leaf_index, leaf_level)
+            self._apply_leaf_lod(ob, leaf_index, lods)
             self._apply_camera_state(ob, state)
             self._apply_shade_and_shiny(ob, state)
             self._apply_surface_state(ob, state)
@@ -1138,19 +1184,24 @@ class _Converter(object):
         coll.xplane.layer.particle_system_file = words[0]
 
     def _apply_lods(self, obj8, coll):
-        """ATTR_LOD -> the collection's LOD levels; returns {leaf: level index}.
+        """ATTR_LOD -> the collection's LOD levels; returns a _Lods.
 
         ATTR_LOD is a stream command: geometry after it draws within that
         distance range until the next one, and a file may have several
         (F4D_Wings.obj has 0-1000 then 0-4000).  XPlane2Blender keeps the ranges
         on the collection and marks each object with the levels it belongs to,
-        so the ranges are collected in file order and every leaf is tagged with
-        the index it fell under.
+        so the ranges are collected in file order and every leaf *and every
+        light* is tagged with the index it fell under.
+
+        Tagging means `xplane.override_lods = True` as well as the `lod[i]`
+        flag: XP2B only reads `lod[]` when that toggle is on, and otherwise
+        inherits the parent's buckets - which are all False, so every object in
+        a file that declares a LOD range was dropped from the export (F4D_Wings
+        lost all 17 draws and all 24 lights that way).
         """
-        ranges = []
-        leaf_level = {}
+        lods = _Lods()
         current = None
-        for kind, payload in obj8.events:
+        for ev_index, (kind, payload) in enumerate(obj8.events):
             if kind == OC.EV_RAW and payload:
                 words = payload.split()
                 if words and words[0] == "ATTR_LOD" and len(words) >= 3:
@@ -1160,24 +1211,29 @@ class _Converter(object):
                         self.warn("%s: ATTR_LOD arguments are not numbers"
                                   % coll.xplane.layer.name)
                         continue
-                    if pair not in ranges:
-                        ranges.append(pair)
+                    if pair not in lods.ranges:
+                        lods.ranges.append(pair)
                     current = pair
-            elif kind == OC.EV_LEAF and current is not None:
-                leaf_level[payload] = ranges.index(current)
+                elif words and words[0].startswith("LIGHT") and lods.ranges:
+                    lods.light[ev_index] = lods.ranges.index(current) \
+                        if current is not None else None
+            elif kind == OC.EV_LEAF and lods.ranges:
+                lods.leaf[payload] = lods.ranges.index(current) \
+                    if current is not None else None
 
-        if not ranges:
-            return leaf_level
-        if len(ranges) > MAX_LOD_LEVELS:
+        if not lods.ranges:
+            return lods
+        if len(lods.ranges) > MAX_LOD_LEVELS:
             self.warn("%s: %d ATTR_LOD ranges, XPlane2Blender holds %d - the "
                       "rest are dropped"
-                      % (coll.xplane.layer.name, len(ranges), MAX_LOD_LEVELS))
-            ranges = ranges[:MAX_LOD_LEVELS]
+                      % (coll.xplane.layer.name, len(lods.ranges),
+                         MAX_LOD_LEVELS))
+            lods.ranges = lods.ranges[:MAX_LOD_LEVELS]
 
         layer = coll.xplane.layer
         try:
-            layer.lods = str(len(ranges))
-            for i, (near, far) in enumerate(ranges):
+            layer.lods = str(len(lods.ranges))
+            for i, (near, far) in enumerate(lods.ranges):
                 if i >= len(layer.lod):
                     layer.lod.add()
                 layer.lod[i].near = near
@@ -1185,17 +1241,11 @@ class _Converter(object):
         except (AttributeError, TypeError) as exc:
             self.warn("%s: could not set the collection LOD levels: %s"
                       % (coll.xplane.layer.name, exc))
-        return leaf_level
+        return lods
 
-    def _apply_leaf_lod(self, ob, leaf_index, leaf_level):
+    def _apply_leaf_lod(self, ob, leaf_index, lods):
         """Mark the object with the LOD level it was drawn under."""
-        level = leaf_level.get(leaf_index)
-        if level is None:
-            return
-        try:
-            ob.xplane.lod[level] = True
-        except (AttributeError, IndexError):
-            pass
+        lods.tag(ob, lods.leaf.get(leaf_index))
 
     def _make_light(self, words, coll):
         """One LIGHT_* line -> one Blender light object, plus its Spec.
@@ -1262,7 +1312,7 @@ class _Converter(object):
         coll.objects.link(ob)
         return ob, spec
 
-    def _build_lights(self, obj8, coll, anchors=None):
+    def _build_lights(self, obj8, coll, anchors=None, lods=None):
         """Turn every LIGHT_* line into a light object; returns how many.
 
         A file can be nothing but lights (Cessna_172SP lights.obj has
@@ -1306,6 +1356,10 @@ class _Converter(object):
                 skipped += 1
                 continue
             ob, spec = made_light
+            # a light inside an ATTR_LOD region is a draw command like any
+            # other: untagged, XP2B drops it from every bucket (see _Lods)
+            if lods is not None:
+                lods.tag(ob, lods.light.get(ev_index))
             if spec is None and words[0] == "LIGHT_PARAM" and len(words) > 1:
                 unknown.add(words[1])
             made += 1

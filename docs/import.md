@@ -113,10 +113,14 @@ Two deliberate choices:
   import reports the names once, per file.
 
 Brightness is a display mapping, not photometry — read the constants at the top of
-`xplights.py` if the imported aircraft looks too dim or too hot. Caveat: a file whose `INTENSITY` carries X-Plane 12's `cd` suffix (`300000cd`)
-cannot be exported at all today, because XP2B's param validation runs `float()` on
-every token; that is not specific to this bridge (any import of such a file hits
-it) and it is unchanged by anything here.
+`xplights.py` if the imported aircraft looks too dim or too hot.
+
+A light inside an `ATTR_LOD` range is tagged with that bucket (`override_lods`
+plus `lod[i]`), exactly like geometry: XP2B writes a draw command only for the
+buckets an object carries, so a file with a single `ATTR_LOD` line used to export
+with no lights *and no `TRIS`* at all — vertices and nothing else. An object the
+file puts outside every range draws at all distances, which is reproduced with
+the widest bucket so its line is not written twice.
 
 ## Materials
 

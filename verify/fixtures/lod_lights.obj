@@ -1,0 +1,25 @@
+I
+800
+OBJ
+
+# Fixture for verify/lights_test.py: a file that declares ATTR_LOD.
+# A draw command inside a LOD range is only written when the object carries the
+# bucket *and* `override_lods`, so this file is the regression for both halves:
+#   * the TRIS inside the first range must reach the export
+#   * the light inside the first range must reach it too, once, in bucket 0
+#   * the light in the second range must reach it in bucket 1
+# Before this was fixed the export carried vertices and nothing else.
+GLOBAL_specular	1
+TEXTURE	mini.png
+POINT_COUNTS	3 0 0 3
+
+VT	0	0	0	0	1	0	0	0
+VT	1	0	0	0	1	0	1	0
+VT	1	0	1	0	1	0	1	1
+IDX10	0 1 2
+
+ATTR_LOD	0	1000
+TRIS	0 3
+LIGHT_PARAM	airplane_landing_sp	1	-0.6	5.9	1	1	1	0	30	0.5
+ATTR_LOD	0	4000
+LIGHT_PARAM	airplane_nav_bb	-1.57	0.61	11.97	1	0	0	0	250	-0.9063	0	-0.4226	0.4617
