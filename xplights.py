@@ -287,10 +287,11 @@ def bind_dimmer(ob, spec, scene, name):
 
     `airplane_panel_sp` is the `sim/cockpit2/switches/panel_brightness_ratio[i]`
     family and `airplane_inst_sp` the instrument one, so an imported cockpit
-    renders at one brightness and nothing can turn it down.  Each index gets a
-    scene property (`xp8_panel_0` .. `xp8_inst_3`) and the light's energy is that
-    value times the power `describe` worked out - preview only, the exporter
-    never reads a param light's energy.
+    renders at one brightness and nothing can turn it down.  Each index the file
+    uses gets a scene property (`xp8_panel_<INDEX>` / `xp8_inst_<INDEX>`, any
+    index, not just 0-3) and the light's energy is that value times the power
+    `describe` worked out - preview only, the exporter never reads a param
+    light's energy.
 
     The expression is a *simple* one on purpose: Blender evaluates those without
     the "auto run python scripts" permission, so a driver never trips a warning
