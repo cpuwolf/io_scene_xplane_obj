@@ -67,8 +67,10 @@ _obja/0/_v10_att_file_stl ../Cessna_172SP_cockpit.obj
   (an A330 cockpit conversion is minutes on its own) still holds the window; the
   status bar then names the file it is on.
 
-What is *not* taken from the `.acf`: the per-object attach offsets and rotations
-(`_v10_att_x/y/z_acf_prt_ref`), the hide datarefs, and anything a livery adds.
+What is *not* taken from the `.acf`: the hide datarefs and anything a livery adds.
+The reference offsets (`_v10_att_x/y/z_acf_prt_ref`) are read but never applied
+during the import — they are a per-aircraft switch instead, because they must not
+reach the exported vertices; see [placement](placement.md).
 The objects come in at their own origin, exactly as if you had imported the
 `.obj` files one by one.
 

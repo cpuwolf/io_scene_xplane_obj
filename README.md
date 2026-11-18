@@ -24,6 +24,18 @@ light level; `ATTR_LOD`, `ATTR_draw_disable`, culling, `ATTR_solid_camera`,
 `objects/*.obj` as one collection under the aircraft's name (Laminar C172: 42 of
 42 found).
 
+## Placement
+
+An aircraft is drawn where its `.acf` says, not where the `.obj` vertices are:
+each part carries a reference point in aircraft coordinates (Lancair Evolution:
+`aft 14.6 ft / down 4.4 ft`). Import never applies it — exporting must not
+carry it, because XPlane2Blender bakes transforms into the `VT` table. So it is a
+switch per aircraft, in `N` → **X-Plane** → **Aircraft placement**: tick
+`Placed` to see the aircraft where X-Plane draws it (and line it up with FMOD
+`sound space` boxes, gizmos, another import), untick before exporting.
+
+[placement](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/placement.md)
+
 ## Animation
 
 <img src="aircraft_demo.gif" width="640" alt="Laminar's King Air C90B imported from the .obj files X-Plane ships">
@@ -140,7 +152,7 @@ step — there is no separate convert step, and no second add-on to keep in step
 | | |
 | --- | --- |
 | the `.acf` is never written | read only, as Laminar asks; changes go into the `.obj` files |
-| per-object attach offsets are not applied | every part arrives at its own origin, as if you had opened each `.obj` by hand |
+| root reference offsets are opt-in | every part arrives at its own origin; [placement](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/placement.md) moves a whole aircraft where its `.acf` draws it, and must be cleared before exporting |
 | `LINES` / `VLINE` | imported read-only, exported from their stored indices |
 | `.pss` | referenced by name only, never read or written |
 | mixed cockpit panel modes | XP2B's layer holds one panel texture mode, so the first wins and the mixture is reported |
@@ -162,6 +174,7 @@ behind the accuracy claim are in
 | [install](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/install.md) | requirements, checking it worked, uninstall |
 | [import](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/import.md) | what the import builds, combo maps, tolerant parsing |
 | [animation](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/animation.md) | the armature, keys, `ANIM_show/hide`, the dataref panel |
+| [placement](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/placement.md) | the `.acf` reference offset, and why it is a switch |
 | [export bridge](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/xp2b-bridge.md) | what maps to what, and the exceptions worth knowing |
 | [known limits](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/docs/known-limits.md) | what is not carried, and how accurate the bridge is |
 | [credits](https://github.com/cpuwolf/io_scene_xplane_obj/blob/main/CREDITS.md) | the bundled exporter: authors, licence, what was changed |

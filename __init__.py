@@ -197,6 +197,62 @@ def _adopt(parent, coll):
         parent.children.link(coll)
 
 
+
+def _collection_roots(coll):
+    """The objects of `coll` that no other member of `coll` already carries."""
+    members = set(coll.all_objects)
+    return [ob for ob in members if ob.parent not in members]
+
+
+def _aircraft_collections():
+    """Every collection that an .acf import tagged as an aircraft."""
+    from . import acfplace
+    return [c for c in bpy.data.collections if c.get(acfplace.PROP_SOURCE)]
+
+
+def _remember_aircraft(coll, acf_path):
+    """Record on the aircraft's collection what its .acf says about placement."""
+    from . import acfplace
+    coll[acfplace.PROP_SOURCE] = os.path.basename(acf_path)
+    spec = acfplace.aircraft_placement(acf_path)
+    if spec:
+        coll[acfplace.PROP] = ([float(v) for v in spec["xyz"]]
+                               + [float(v) for v in spec["rot"]])
+    return spec
+
+
+def _apply_placements(coll):
+    """Move the whole aircraft to the position X-Plane draws it at."""
+    from . import acfplace
+    values = coll.get(acfplace.PROP)
+    if not values or coll.get(acfplace.PROP_ON):
+        return 0
+    spec = {"xyz": list(values)[:3], "rot": list(values)[3:6]}
+    matrix = acfplace.offset_matrix(spec)
+    moved = 0
+    for ob in _collection_roots(coll):
+        ob.matrix_basis = matrix @ ob.matrix_basis
+        moved += 1
+    coll[acfplace.PROP_ON] = 1
+    return moved
+
+
+def _clear_placements(coll):
+    """Put that aircraft back at its OBJ origins (the exportable state)."""
+    from . import acfplace
+    if not coll.get(acfplace.PROP_ON):
+        return 0
+    values = coll.get(acfplace.PROP) or [0.0] * 6
+    spec = {"xyz": list(values)[:3], "rot": list(values)[3:6]}
+    matrix = acfplace.offset_matrix(spec).inverted()
+    back = 0
+    for ob in _collection_roots(coll):
+        ob.matrix_basis = matrix @ ob.matrix_basis
+        back += 1
+    del coll[acfplace.PROP_ON]
+    return back
+
+
 def _convert(context, headers, report):
     """The exportable collections built for these headers ([] if XP2B cannot).
 
@@ -349,6 +405,13 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
         name="File Path", type=bpy.types.OperatorFileListElement,
         options={'SKIP_SAVE', 'HIDDEN'})
 
+    place_by_acf: BoolProperty(
+        name="Place by .acf",
+        description="Move each object by the offset this .acf gives it, so the "
+                    "aircraft sits where X-Plane draws it (clear it again "
+                    "before exporting .obj)",
+        default=False)
+
     def invoke(self, context, event):
         if self.properties.is_property_set("filepath") or len(self.files):
             return self.execute(context)
@@ -380,6 +443,7 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
         paths = []
         seen = set()
         missing = []
+        self._acf_files = {}
         for acf in acfs:
             try:
                 found, gone = AF.objects(acf)
@@ -387,6 +451,9 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
                 self.report({'ERROR'}, "%s: %s" % (os.path.basename(acf), exc))
                 continue
             group = os.path.basename(acf)
+            # the aircraft collection is keyed by this basename, but the offset
+            # lives in the file itself - keep the path to read it later
+            self._acf_files[group] = acf
             # two .acf of the same family (Cessna_172SP.acf and its _seaplane
             # variant) share objects; importing a file twice would build two
             # identical collections, one of which nothing refers to.  The
@@ -491,6 +558,8 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
             coll = bpy.data.collections.new(name)
             context.scene.collection.children.link(coll)
             self._parents[name] = coll
+            _remember_aircraft(coll,
+                               getattr(self, "_acf_files", {}).get(name, name))
         return coll
 
     def _step(self, context):
@@ -543,6 +612,12 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
             self._timer = None
         window_manager.progress_end()
         self._status(context, None)
+        if getattr(self, "place_by_acf", False):
+            for coll in self._parents.values():
+                moved = _apply_placements(coll)
+                if moved:
+                    print("xplane_obj: placed %s (%d objects) by its .acf"
+                          % (coll.name, moved), flush=True)
         left = len(self._queue)
         self._queue = []
 
@@ -1065,11 +1140,104 @@ def _register_xp2b():
     return _register_xp2b_now()
 
 
+def _menu_object(self, context):
+    """Object > Clear ACF Placement: the exit before exporting .obj."""
+    self.layout.operator("object.xp8_acf_placement_clear",
+                         text="Clear ACF Placement")
+
+
+@_add
+class OBJECT_OT_xp8_acf_placement_toggle(bpy.types.Operator):
+    """Place this aircraft where X-Plane draws it, or put it back"""
+    bl_idname = "object.xp8_acf_placement_toggle"
+    bl_label = "Toggle Aircraft Placement"
+    bl_description = ("Move the whole aircraft by the offset its .acf gives it, "
+                      "or restore the OBJ origins so the file can be exported")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    coll_name: StringProperty(name="Aircraft collection")
+
+    def execute(self, context):
+        from . import acfplace
+        coll = bpy.data.collections.get(self.coll_name)
+        if coll is None:
+            self.report({'ERROR'}, "no aircraft collection named %r"
+                        % self.coll_name)
+            return {'CANCELLED'}
+        if coll.get(acfplace.PROP_ON):
+            back = _clear_placements(coll)
+            self.report({'INFO'}, "%s: %d object(s) back at the OBJ origin"
+                        % (coll.name, back))
+        else:
+            moved = _apply_placements(coll)
+            self.report({'INFO'}, "%s: %d object(s) placed - clear before "
+                        "exporting .obj" % (coll.name, moved))
+        return {'FINISHED'}
+
+
+@_add
+class OBJECT_OT_xp8_acf_placement_clear(bpy.types.Operator):
+    """Put every placed aircraft back at its OBJ origins"""
+    bl_idname = "object.xp8_acf_placement_clear"
+    bl_label = "Clear ACF Placement"
+    bl_description = ("Restore the OBJ origins for every aircraft placed by an "
+                      ".acf, so the scene exports exactly as it was imported")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        from . import acfplace
+        return any(c.get(acfplace.PROP_ON) for c in _aircraft_collections())
+
+    def execute(self, context):
+        total = sum(_clear_placements(c) for c in _aircraft_collections())
+        self.report({'INFO'}, "%d object(s) back at the OBJ origin" % total)
+        return {'FINISHED'}
+
+
+@_add
+class VIEW3D_PT_xplane_aircraft_placement(bpy.types.Panel):
+    """Which aircraft this scene has, and whether it sits where X-Plane puts it"""
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "X-Plane"
+    bl_label = "Aircraft placement"
+
+    def draw(self, context):
+        from . import acfplace
+        layout = self.layout
+        rows = _aircraft_collections()
+        if not rows:
+            layout.label(text="Import an .acf to place an aircraft",
+                         icon='INFO')
+            return
+        for coll in rows:
+            box = layout.box()
+            box.label(text=coll.get(acfplace.PROP_SOURCE) or coll.name,
+                      icon='OUTLINER_COLLECTION')
+            values = coll.get(acfplace.PROP)
+            if not values:
+                box.label(text="no placement offset in this .acf")
+                continue
+            box.label(text="offset   aft %+.2f ft   down %+.2f ft"
+                      % (values[2], -values[1]))
+            on = bool(coll.get(acfplace.PROP_ON))
+            row = box.row()
+            row.operator("object.xp8_acf_placement_toggle",
+                         text="Placed" if on else "Not placed",
+                         depress=on,
+                         icon='CHECKBOX_HLT' if on else 'CHECKBOX_DEHLT'
+                         ).coll_name = coll.name
+            if on:
+                box.label(text="clear before exporting .obj", icon='ERROR')
+
+
 def register():
     _register_xp2b()
     for cls in CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.TOPBAR_MT_file_import.append(_menu_import)
+    bpy.types.VIEW3D_MT_object.append(_menu_object)
 
 
 def _fcurves_of(action):
@@ -1122,6 +1290,10 @@ def _rescue_xp2b_later():
 def unregister():
     global _own_xp2b
     bpy.types.TOPBAR_MT_file_import.remove(_menu_import)
+    try:
+        bpy.types.VIEW3D_MT_object.remove(_menu_object)
+    except (AttributeError, ValueError):
+        pass
     for cls in reversed(CLASSES):
         bpy.utils.unregister_class(cls)
     if _own_xp2b:
