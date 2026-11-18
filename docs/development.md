@@ -88,11 +88,9 @@ What ships is a **wheel**, declared with the manifest's top-level
 `extensions/.local/lib/pythonX.Y/site-packages`, which sits in `sys.path` ahead
 of `scripts/addons/`. The package therefore keeps its upstream top-level name
 `io_xplane2blender`, and the code goes into the wheel as upstream writes it — no
-import rewriting, no attribute-walk fixes — apart from the single entry in
-`PATCHES` in `scripts/build_wheel.py` (the empty-scene crash in
-`xplane_ui.RENDER_PT_xplane`, which the pinned commit does not fix yet). The build
-dies, naming the file, if that snippet ever moves, so an upstream edit cannot ship
-a silently unpatched wheel.
+import rewriting, no attribute-walk fixes. Nothing is patched at build time: a
+bug in the exporter is fixed in `cpuwolf/XPlane2Blender` and the pin moves, so
+what the wheel contains is exactly what `vendor/XPlane2Blender` holds.
 
 ```sh
 git submodule update --init                     # once, after cloning

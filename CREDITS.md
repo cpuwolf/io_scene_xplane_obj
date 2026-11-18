@@ -28,15 +28,12 @@ does not allow an add-on whose features depend on another add-on.
 Because the wheel keeps the upstream top-level package name, the code travels
 unmodified: no imports are rewritten and no module paths are redirected.
 
-Exactly one change is made when building the wheel (`PATCHES` in
-`scripts/build_wheel.py`), and it is a crash rather than a style fix:
-
-* `xplane_ui.RENDER_PT_xplane` reads `context.active_object.xplane` with no None
-  guard, so **an empty scene throws on every redraw** as soon as this exporter is
-  registered — reported by a user installing on Windows with nothing open. One
-  `is not None`; reported upstream and to be dropped from `PATCHES` as soon as
-  the pinned commit carries it. The build fails loudly if that line ever moves,
-  so an upstream edit cannot ship a wheel that is silently unpatched.
+Nothing is changed when building the wheel: it is the pinned commit byte for
+byte. The fork (`cpuwolf/XPlane2Blender`) carries one fix the upstream release
+does not — `xplane_ui` and `xplane_ops` read `context.active_object.xplane`
+without a None guard, so **an empty scene threw on every redraw of the Render
+panel** as soon as this exporter registered, reported by a user installing on
+Windows with nothing open.
 
 Everything else — operators, panels, properties, the updater, resources, tests —
 is upstream code at the pinned commit.
