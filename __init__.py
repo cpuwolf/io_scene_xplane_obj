@@ -76,6 +76,7 @@ from . import acfcodec as AF
 from . import objcodec as OC
 from . import xpanim as XA
 from . import xpmesh as XM
+from . import xpvr as XVR
 
 CLASSES = []
 
@@ -641,6 +642,28 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
                           % (coll.name, moved), flush=True)
         left = len(self._queue)
         self._queue = []
+
+        # the VR configuration is aircraft-scoped (file name = the .acf's prefix,
+        # hotspots in aircraft coordinates) and its manipulators can only be
+        # resolved once every object is in the scene, so it is built here, after
+        # the last one and after any placement - not per file.
+        self._vr = {}
+        for group, aircraft in list(self._parents.items()):
+            acf_path = getattr(self, "_acf_files", {}).get(group)
+            if not acf_path:
+                continue
+            try:
+                info = XVR.build(context, aircraft, acf_path, self.report)
+            except Exception as exc:                      # noqa: BLE001
+                self.report({'WARNING'}, "vrconfig: %s" % exc)
+                continue
+            if info:
+                self._vr[group] = info
+                if not getattr(self, "place_by_acf", False) and info["hotspots"]:
+                    self.report({'INFO'},
+                                "%s: hotspots are placed in the aircraft frame - "
+                                "turn on Place by .acf to see them inside the "
+                                "cockpit" % info["file"])
 
         # a parent whose every object failed to import is an empty shell with
         # the aircraft's name on it - drop it instead of leaving that behind

@@ -16,6 +16,7 @@ debugged without starting Blender.
 python3 verify/test_fixture.py                     # pinned parser expectations
 python3 verify/test_anim.py                        # ANIM_* evaluator, no Blender
 python3 verify/test_acf.py                         # .acf -> object paths, no Blender
+python3 verify/test_vrconfig.py [-- <corpus>]       # vrconfig reader: byte-identical round trip
 python3 verify/namecheck.py [dist/<id>-<ver>.zip]   # no module uses a name it never binds
 
 blender -b --factory-startup --python verify/material_combo_test.py   # combo map, texture + light-level fields, XP2B output
@@ -33,6 +34,7 @@ blender -b --factory-startup --python verify/find_header_test.py -- verify/fixtu
 blender -b --factory-startup --python verify/acf_import.py -- <file.acf>        # one aircraft, every object it attaches
 blender -b --factory-startup --python verify/export_snapshot.py -- <in.obj> <out.txt>  # one file's export text, to diff before/after
 blender -b --factory-startup --python verify/weld_test.py [-- <file.obj>]        # weld_vertices: corners keep their UV + normal
+blender -b --factory-startup --python verify/vrconfig_blend_test.py -- <file.acf>  # vrconfig hotspots land in the cockpit (ray cast)
 ```
 
 `acf_import.py` loads this working tree by path, so it grades the code you are

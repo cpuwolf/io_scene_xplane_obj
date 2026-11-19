@@ -128,3 +128,48 @@ def resolve(acf_path, text):
 def objects(acf_path):
     """(existing .obj paths, raw names missing on disk) for one .acf."""
     return resolve(acf_path, read_text(acf_path))
+
+
+#: the CG, in feet, in the same authoring-point frame the `_obja` offsets use.
+#: Keys are written as `P acf/_cgY 0.0` in the .acf, so the prefix is part of the
+#: comparison.
+CG_KEYS = ("acf/_cgX_lft", "acf/_cgX_rgt", "acf/_cgY", "acf/_cgZ")
+
+
+def cg(text):
+    """The aircraft's centre of gravity as (x, y, z) **feet**.
+
+    Plane-Maker writes the CG against the aircraft's authoring point, which is
+    the same origin the attached-object offsets are measured from - so the CG is
+    what a ``_vrconfig.txt`` means when it says "relative to the default CG"
+    (unless its own ``REF_POINT_ACF`` says otherwise).
+
+    X is a *range* in the file (``_cgX_lft`` / ``_cgX_rgt``, Plane-Maker's W&B
+    envelope); the middle of it is used.  Returns None when the file has no CG at
+    all (a hand-written .acf, or a shape we do not know).
+    """
+    found = {}
+    for line in text.splitlines():
+        words = line.split(None, 2)
+        if len(words) < 3:
+            continue
+        key = words[1]
+        if key in CG_KEYS:
+            try:
+                found[key] = float(words[2])
+            except ValueError:
+                pass
+    _x = 0.0
+    if "acf/_cgX_lft" in found and "acf/_cgX_rgt" in found:
+        _x = (found["acf/_cgX_lft"] + found["acf/_cgX_rgt"]) / 2.0
+    if "acf/_cgY" not in found and "acf/_cgZ" not in found:
+        return None
+    return (_x, found.get("acf/_cgY", 0.0), found.get("acf/_cgZ", 0.0))
+
+
+def read_cg(acf_path):
+    """`cg()` for a file; None when it cannot be read."""
+    try:
+        return cg(read_text(acf_path))
+    except (OSError, ValueError):
+        return None

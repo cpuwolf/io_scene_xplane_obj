@@ -1,0 +1,47 @@
+A
+1100
+VRCONFIG
+
+# Fixture for verify/test_vrconfig.py.  One of each thing that made the real
+# files awkward to read:
+#   * a hotspot with COMMA-separated numbers (the C90B GTN ship file does this)
+#   * a STANDING hotspot (its XYZ is the feet, not the head)
+#   * a REF_POINT_ACF that moves the origin away from the CG
+#   * a one-argument manip block, a two-argument one, one with a TOOLTIP
+#   * an ACTION that retypes the manipulator (a command_switch read as a
+#     command_axis) - the lookup key must stay the OBJ's own type
+#   * comments and blank lines between blocks, which a write-back must not eat
+####
+# TELEPORT HOTSPOTS
+####
+
+BEGIN_TELEPORT_HOTSPOT SITTING Pilot's Seat
+   AABB -0.6843 0.2635 -0.9620 -0.0843 0.4635 -0.3620
+   PRESET_XYZ -0.3843, 0.9135, -0.6620
+   PRESET_PSI 0.0000
+   PRESET_THE 0.0000
+   PRESET_PHI 0.0000
+END_TELEPORT_HOTSPOT
+
+BEGIN_TELEPORT_HOTSPOT STANDING Observer
+   AABB 0.1000 0.2000 -0.3000 0.5000 0.6000 0.1000
+   PRESET_XYZ 0.3000 0.4000 -0.1000
+   PRESET_PSI 180.0
+   PRESET_THE -10.0
+   PRESET_PHI 5.0
+END_TELEPORT_HOTSPOT
+
+REF_POINT_ACF 0.3048 10.2108
+
+BEGIN_MANIP axis_knob laminar/c90/airCon/dial/cabin_temp
+	DEG_PER_ACTION 2
+END_MANIP
+
+BEGIN_MANIP command_knob sim/systems/wipers_up sim/systems/wipers_dn
+	DEG_PER_ACTION 30
+END_MANIP
+
+BEGIN_MANIP command_switch_up_down sim/autopilot/speed_knob_push sim/autopilot/speed_knob_pull Autopilot Speed Knob
+	ACTION command_axis 0.0 0.0 0.2 sim/autopilot/speed_knob_push sim/autopilot/speed_knob_pull
+	HOLD_MANIP
+END_MANIP

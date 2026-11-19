@@ -74,6 +74,45 @@ reach the exported vertices; see [placement](placement.md).
 The objects come in at their own origin, exactly as if you had imported the
 `.obj` files one by one.
 
+## VR hotspots (`<acf>_vrconfig.txt`)
+
+An aircraft's VR configuration is imported with it: **File > Import > X-Plane
+Aircraft (.acf)** reads `<acf>_vrconfig.txt` from the same folder (that is where
+and how X-Plane looks for it) and builds one collection beside the aircraft:
+
+```
+C90B_vrconfig.txt               plain collection, never exported
+├ Pilot's Seat                  CAMERA at the eye point, aimed the way the seat looks
+├ Pilot's Seat [AABB]           the teleport grab volume, drawn as a wire box
+└ …
+```
+
+* The hotspot's `PRESET_XYZ` and `PSI`/`THE`/`PHI` become the camera's location
+  and rotation, so **Numpad 0 is the view from that seat** - which is the one
+  thing about a hotspot that cannot be read off the numbers.
+* `AABB` becomes a box whose extents are the file's, drawn as a wireframe in
+  Solid (material alpha does not show there) and as a translucent volume in a
+  rendered view. It is the **grab** volume, not the seat: a file may put the head
+  above it, and 12 of the 78 hotspots X-Plane 12 ships do.
+* Coordinates are read the way the file means them: aircraft metres relative to
+  the CG unless `REF_POINT_ACF` moves the origin (three forms: absent = current
+  CG from the `.acf`, bare = the Plane-Maker authoring point, `Y Z` = the old CG).
+  The origin actually used is stored on the collection and printed at import.
+* Every `BEGIN_MANIP` block is resolved against the manipulators the imported
+  objects carry, and the blocks that point at geometry the aircraft no longer has
+  are reported (Laminar's CitationX ships three). Each resolved mesh is tagged
+  with the VR overrides that apply to it (`vr_manips`).
+* **Read-only.** This imports the file; it does not save it. Moving a camera or a
+  box changes nothing on disk. The file's own text is kept on the collection
+  (`vrconfig_dump`) so a write-back can later replace only the blocks that
+  changed.
+* Everything it creates is **blue**: Blender's `COLOR_05` tag on the collection
+  (the stripe in the outliner) and the same `#3887c7` as the object colour, so
+  Solid > Color > Object shows the whole VR layer apart from the aircraft.
+* Hotspots are in the aircraft frame, so they line up with the cockpit once
+  *Place by .acf* is on. Without it each `.obj` sits at its own file origin and
+  the import says so.
+
 ## Geometry
 
 * One **mesh per geometry command** (`TRIS` / `LINES`): a 21-part fuselage is 21
