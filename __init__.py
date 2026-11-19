@@ -89,7 +89,7 @@ def _add(cls):
 # import
 # ---------------------------------------------------------------------------
 
-def _import_objects(context, paths, report, coll=None):
+def _import_objects(context, paths, report, coll=None, weld_vertices=False):
     """Import every path into the scene; (files imported, triangles, headers).
 
     Shared by the .obj operator (one file, a dropped multi-selection or a whole
@@ -103,7 +103,8 @@ def _import_objects(context, paths, report, coll=None):
         print("xplane_obj: importing %s" % p, flush=True)
         try:
             header = XM.import_file(context, p, into_collection=coll,
-                                    report=report, preview_rig=False)
+                                    report=report, preview_rig=False,
+                                    weld_vertices=weld_vertices)
         except (ValueError, OSError) as exc:
             report({'ERROR'}, "%s: %s" % (os.path.basename(p), exc))
             continue
@@ -318,6 +319,15 @@ class IMPORT_OT_xplane_obj(bpy.types.Operator, ImportHelper):
         description="Import every .obj sitting next to the selected file",
         default=False)
 
+    weld_vertices: BoolProperty(
+        name="Weld vertices by position",
+        description="Merge the vertices that share a position into one. An "
+                    "OBJ8 stores a row per triangle corner, so a hard edge or "
+                    "a texture seam repeats the same point 2-4 times; welding "
+                    "gives a mesh that does not tear when you edit it. UVs and "
+                    "normals stay as authored (they are per-corner in Blender)",
+        default=False)
+
     def invoke(self, context, event):
         """A dropped file arrives with `filepath` (or `files`) already set.
 
@@ -363,7 +373,8 @@ class IMPORT_OT_xplane_obj(bpy.types.Operator, ImportHelper):
             context.scene.collection.children.link(coll)
 
         made, tri_count, headers = _import_objects(context, paths, self.report,
-                                                   coll)
+                                                   coll,
+                                                   self.weld_vertices)
         if not made:
             self.report({'ERROR'}, "nothing imported")
             return {'CANCELLED'}
@@ -410,6 +421,15 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
         description="Move each object by the offset this .acf gives it, so the "
                     "aircraft sits where X-Plane draws it (clear it again "
                     "before exporting .obj)",
+        default=False)
+
+    weld_vertices: BoolProperty(
+        name="Weld vertices by position",
+        description="Merge the vertices that share a position into one. An "
+                    "OBJ8 stores a row per triangle corner, so a hard edge or "
+                    "a texture seam repeats the same point 2-4 times; welding "
+                    "gives a mesh that does not tear when you edit it. UVs and "
+                    "normals stay as authored (they are per-corner in Blender)",
         default=False)
 
     def invoke(self, context, event):
@@ -579,7 +599,8 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
         parent.children.link(sub)
         try:
             header = XM.import_file(context, path, into_collection=sub,
-                                    report=self.report, preview_rig=False)
+                                    report=self.report, preview_rig=False,
+                                    weld_vertices=self.weld_vertices)
         except (ValueError, OSError) as exc:
             self.report({'ERROR'}, "%s: %s" % (name, exc))
             header = None

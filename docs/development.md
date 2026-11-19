@@ -32,6 +32,7 @@ blender -b --factory-startup --python verify/xp2b_convert.py -- <file.obj>      
 blender -b --factory-startup --python verify/find_header_test.py -- verify/fixtures/nested.obj  # the four _find_header call sites: panel draw, dataref picker, both operators
 blender -b --factory-startup --python verify/acf_import.py -- <file.acf>        # one aircraft, every object it attaches
 blender -b --factory-startup --python verify/export_snapshot.py -- <in.obj> <out.txt>  # one file's export text, to diff before/after
+blender -b --factory-startup --python verify/weld_test.py [-- <file.obj>]        # weld_vertices: corners keep their UV + normal
 ```
 
 `acf_import.py` loads this working tree by path, so it grades the code you are

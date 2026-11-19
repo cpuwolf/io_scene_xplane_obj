@@ -81,6 +81,23 @@ The objects come in at their own origin, exactly as if you had imported the
 * Every `VT` row's authored normal is kept as a **custom split normal** —
   X-Plane stores lighting normals per vertex and they are not the averaged face
   normals Blender would invent.
+* **One Blender vertex per `VT` row** by default, which is what the file says.
+  OBJ8 stores a row per triangle *corner*, so a hard edge or a texture seam
+  repeats the same position: a Laminar cockpit lands 39 % more vertices than it
+  has distinct points, and moving one of them leaves a crack. *Weld vertices by
+  position* builds one vertex per position instead — UVs and normals are
+  per-corner in Blender, so they are written from the source rows either way and
+  the mesh looks the same. What the weld costs, exactly, on the C90B cockpit:
+  * the **28 triangles of 25,399 whose corners share a position** have no area;
+    welding collapses them into a face with a repeated vertex and Blender drops
+    it (the import reports them),
+  * sharing a vertex between corners with **different** normals makes Blender
+    store those as int16 offsets against the averaged vertex normal, so they can
+    move by up to **0.33°** (measured max; invisible in the sim),
+  * and because XPlane2Blender's vertex optimizer compares exact floats, that
+    drift can grow the exported `VT` table slightly (25,558 → 26,713 rows here).
+  It is off by default, and `verify/weld_test.py` grades it on a fixture and on
+  any real file.
 * **Winding is flipped** on both sides: X-Plane calls a *clockwise* triangle the
   front face, Blender a counter-clockwise one. Skipping this makes every model
   render inside-out — no error, just invisible surfaces.

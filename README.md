@@ -157,6 +157,10 @@ the first material's textures. Material clones are shared per state combination
    Blender once.
 2. Drag a **`.acf`** (whole aircraft) or `.obj` files onto the viewport, or use
    **File > Import** — *Import whole folder* brings in a whole `objects/` directory.
+   Tick **Weld vertices by position** there for one vertex per point instead of one
+   per `VT` row: an OBJ8 stores a row per triangle corner, so hard edges and texture
+   seams arrive as duplicate vertices, which tear apart when you move one. UVs and
+   normals are kept either way; it is off by default.
 3. Edit, then **File > Export > X-Plane Object (.obj)**. Export is
    XPlane2Blender's own operator, bundled as a wheel: nothing here writes a `.obj`
    itself, so authoring manipulators, new animations, lights and LODs works exactly

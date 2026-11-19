@@ -1186,7 +1186,7 @@ def _chain_visibility(chain):
 
 def import_file(context, path, into_collection=None, report=None,
                 place_parts=True, anim_position=0.0, anim_overrides="",
-                bake_actions=True, preview_rig=True):
+                bake_actions=True, preview_rig=True, weld_vertices=False):
     """Import one .obj file.  Returns the header Empty (or None on failure).
 
     With `place_parts` every batch inside an ANIM_begin/ANIM_end block gets a
@@ -1202,6 +1202,15 @@ def import_file(context, path, into_collection=None, report=None,
     none of them - the caller is about to convert the file to an XPlane2Blender
     scene, which builds its own armature, and two rigs of the same animation in
     one .blend is one rig too many.
+
+    `weld_vertices` builds one Blender vertex per **position** instead of one
+    per `VT` row.  OBJ8 stores a `VT` row per corner, so a hard edge or a
+    texture seam repeats the same position two to four times: a Laminar cockpit
+    lands 39 % more vertices than it has distinct points.  Welding gives a mesh
+    that behaves when edited (no cracks when a vertex is moved) at no cost on
+    export - UVs and normals are per-loop in Blender and are written from the
+    source rows either way.  What is lost is the one-row-per-vertex mapping
+    (`xp8_vt`), which nothing reads back.
     """
     path = os.path.abspath(path)
     with open(path, "rb") as f:
@@ -1263,7 +1272,8 @@ def import_file(context, path, into_collection=None, report=None,
     for leaf_index, leaf in enumerate(obj8.leaves):
         if leaf.kind == "TRIS":
             ob = _build_tris_object(context, obj8, leaf, base, leaf_index,
-                                    mat, coll, warnings)
+                                    mat, coll, warnings,
+                                    weld=weld_vertices)
         else:
             ob = _build_lines_object(obj8, leaf, base, leaf_index, vline_pts,
                                      coll, warnings)
@@ -1383,7 +1393,50 @@ def _set_custom_normals(mesh, normals):
             pass
 
 
-def _build_tris_object(context, obj8, leaf, base, leaf_index, mat, coll, warnings):
+def _pos_key(co):
+    """Quantised position: the weld key.
+
+    0.1 mm is far below anything the sim shows, and coarse enough that float32
+    storage in Blender cannot flip a value across a bucket boundary.
+    """
+    return (int(round(co[0] * POS_Q)), int(round(co[1] * POS_Q)),
+            int(round(co[2] * POS_Q)))
+
+
+def _welded_loop_rows(mesh, faces, tris, vert_row, warnings):
+    """Source `VT` index for every loop of a welded mesh.
+
+    With welding on, a triangle whose corners share a position collapses and
+    `validate()` drops it, so the polygon list is no longer the triangle list -
+    the same trap as the `validate()` note below, one level deeper: a per-vertex
+    map cannot answer which row a loop came from at all.  `from_pydata` and
+    `validate()` keep face order, so walk both lists and skip the source
+    triangles that vanished.
+    """
+    rows = []
+    src = 0
+    for poly in mesh.polygons:
+        pv = tuple(poly.vertices)
+        while src < len(faces) and faces[src] != pv:
+            src += 1
+        if src >= len(faces):
+            break
+        rows.extend(tris[src * 3:src * 3 + 3])
+        src += 1
+    if len(rows) != len(mesh.loops):
+        # a scrambled UV stream that still imports is the failure mode worth
+        # avoiding: say it, then fall back to the vertex's own row
+        warnings.append("welded mesh: %d of %d triangles could not be matched "
+                        "back to their VT rows - UVs/normals of those fall "
+                        "back to the vertex's first row"
+                        % (len(mesh.polygons) - len(rows) // 3,
+                           len(mesh.polygons)))
+        return [vert_row[loop.vertex_index] for loop in mesh.loops]
+    return rows
+
+
+def _build_tris_object(context, obj8, leaf, base, leaf_index, mat, coll,
+                       warnings, weld=False):
     idx = leaf.indices
     usable = len(idx) - (len(idx) % 3)
     if usable != len(idx):
@@ -1393,26 +1446,48 @@ def _build_tris_object(context, obj8, leaf, base, leaf_index, mat, coll, warning
         return None
     tris = OC.flip_winding(idx[:usable])   # X-Plane CW front -> Blender CCW front
 
-    remap = {}
+    # One Blender vertex per VT row, or - with `weld` - per position.  OBJ8
+    # carries a row per *corner*, so a hard edge or a texture seam repeats the
+    # same position; welding those into one vertex is what makes the mesh
+    # editable.  UVs and normals are per-loop in Blender, so nothing is lost
+    # visually: they are written from the source rows further down.
+    remap = {}          # weld key -> Blender vertex index
     verts = []
-    vrows = []
+    vert_row = []       # the VT row that created each vertex (for xp8_vt)
+    local = []
+    warned = set()
     for vi in tris:
-        if vi in remap:
-            continue
         if not (0 <= vi < len(obj8.vt)):
-            warnings.append("TRIS %d %d references VT %d of %d"
-                            % (leaf.offset, leaf.count, vi, len(obj8.vt)))
-            remap[vi] = 0 if not verts else len(verts) - 1
+            if vi not in warned:
+                warned.add(vi)
+                warnings.append("TRIS %d %d references VT %d of %d"
+                                % (leaf.offset, leaf.count, vi, len(obj8.vt)))
+            local.append(0 if not verts else len(verts) - 1)
             continue
         row = obj8.vt[vi]
-        remap[vi] = len(verts)
-        verts.append(xp_to_bl((row.px, row.py, row.pz)))
-        vrows.append(row)
+        co = xp_to_bl((row.px, row.py, row.pz))
+        key = _pos_key(co) if weld else vi
+        bv = remap.get(key)
+        if bv is None:
+            bv = remap[key] = len(verts)
+            verts.append(co)
+            vert_row.append(vi)
+        local.append(bv)
     if not verts:
         return None
 
-    local = [remap[v] for v in tris]
     faces = [tuple(local[i:i + 3]) for i in range(0, len(local), 3)]
+    if weld:
+        # a triangle whose corners share a position (the file ships those: 28 of
+        # them in the C90B cockpit) has no area, and welding collapses it into a
+        # face with a repeated vertex that validate() then removes.  Say so -
+        # the triangle count of the exported file changes and nothing else says
+        # why.
+        collapsed = sum(1 for f in faces if len(set(f)) < 3)
+        if collapsed:
+            warnings.append("TRIS %d %d: %d zero-area triangle(s) collapsed by "
+                            "welding and were dropped"
+                            % (leaf.offset, leaf.count, collapsed))
 
     name = "%s_%03d" % (base, leaf_index)
     me = _new_mesh(name)
@@ -1424,16 +1499,21 @@ def _build_tris_object(context, obj8, leaf, base, leaf_index, mat, coll, warning
     # Looking them up as tris[k] is wrong: validate() drops near-degenerate
     # slivers (this file has triangles down to 1e-9 m^2), and from that face
     # onwards every loop index has shifted by three - the UV stream would land
-    # on the wrong vertices for the rest of the mesh.  remap is injective
-    # (one Blender vertex per VT index), so inverting it gives the VT row that
-    # each surviving loop actually belongs to.
-    inv = {bv: vi for vi, bv in remap.items()}
+    # on the wrong vertices for the rest of the mesh.  Unwelded, remap is
+    # injective (one Blender vertex per VT index), so inverting it gives the VT
+    # row that each surviving loop actually belongs to.  Welded, several rows
+    # share a vertex, so the row is carried per polygon instead.
+    if weld:
+        row_of_loop = _welded_loop_rows(me, faces, tris, vert_row, warnings)
+    else:
+        inv = {bv: vi for vi, bv in remap.items()}
+        row_of_loop = [inv.get(loop.vertex_index) for loop in me.loops]
     uv = me.uv_layers.new(name="UVMap")
     flat_uv = [0.0] * (len(me.loops) * 2)
     normals = []
     have_normals = True
     for k, loop in enumerate(me.loops):
-        vi = inv.get(loop.vertex_index)
+        vi = row_of_loop[k]
         row = obj8.vt[vi] if vi is not None and 0 <= vi < len(obj8.vt) else None
         if row is not None:
             flat_uv[k * 2] = row.s
@@ -1451,11 +1531,11 @@ def _build_tris_object(context, obj8, leaf, base, leaf_index, mat, coll, warning
     if have_normals:
         _set_custom_normals(me, normals)
 
-    # where each Blender vertex came from, so an untouched row can be written
-    # back with its original text
+    # where each Blender vertex came from (its first VT row, when welded), so
+    # an untouched row can be written back with its original text
     try:
         attr = me.attributes.new(PROP_VT_ATTR, 'INT', 'POINT')
-        attr.data.foreach_set("value", [vi for vi in remap])
+        attr.data.foreach_set("value", vert_row)
     except Exception:
         pass
 
