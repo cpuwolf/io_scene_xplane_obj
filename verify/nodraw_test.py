@@ -1,12 +1,16 @@
-"""ATTR_draw_disable must reach Blender as a transparent material.
+"""ATTR_draw_disable must reach Blender as a green, half-transparent material.
 
     <blender> -b --factory-startup --python verify/nodraw_test.py
 
 X-Plane's "Draw objects with this material" is OBJ8's ATTR_draw_disable.  The
-conversion already copies the material and clears xplane.draw for it; this
-checks the copy also ends up at alpha 0 (with the texture's alpha link cut, or
-the socket value would be ignored), while the sibling that draws normally keeps
-alpha 1.
+conversion copies the material and clears xplane.draw for it; this checks the
+copy is also painted - green, alpha 0.5, roughness 0.3, with the texture's base
+colour and alpha links cut (or the socket values would be ignored) - while the
+sibling that draws normally keeps alpha 1 and its texture.
+
+The colour is viewport-only: what the export must carry is xplane.draw, so that
+is checked too.  ATTR_solid_camera has its own colours and its own test
+(verify/nodraw_camera_test.py).
 """
 import json
 import os
@@ -51,11 +55,18 @@ def material_rows():
             continue
         rows.append({
             "name": mat.name,
+            "colour": tuple(round(v, 3)
+                            for v in bsdf.inputs['Base Color'].default_value)[:3],
+            "base_linked": any(l.to_node == bsdf
+                               and l.to_socket.name == 'Base Color'
+                               for l in mat.node_tree.links),
+            "roughness": round(bsdf.inputs['Roughness'].default_value, 4),
             "alpha": round(bsdf.inputs['Alpha'].default_value, 4),
             "alpha_linked": any(l.to_node == bsdf and l.to_socket.name == 'Alpha'
                                 for l in mat.node_tree.links),
             "render_method": getattr(mat, "surface_render_method", "?"),
             "diffuse_alpha": round(mat.diffuse_color[3], 4),
+            "diffuse_colour": tuple(round(v, 3) for v in mat.diffuse_color)[:3],
             "xp2b_draw": getattr(getattr(mat, "xplane", None), "draw", None),
         })
     return rows
@@ -87,14 +98,27 @@ def run(fname, expect_nodraw):
               "%s: expected one *_nodraw material, got %d"
               % (fname, len(nodraw)))
         for m in nodraw:
-            check(m["alpha"] == 0.0,
-                  "%s: nodraw alpha is %s, expected 0" % (m["name"], m["alpha"]))
+            check(m["alpha"] == 0.5,
+                  "%s: nodraw alpha is %s, expected 0.5"
+                  % (m["name"], m["alpha"]))
+            check(m["colour"] == (0.0, 1.0, 0.0),
+                  "%s: base colour %s, expected green"
+                  % (m["name"], m["colour"]))
+            check(not m["base_linked"],
+                  "%s: base colour still driven by the texture" % m["name"])
+            check(m["roughness"] == 0.3,
+                  "%s: roughness %s, expected 0.3"
+                  % (m["name"], m["roughness"]))
             check(not m["alpha_linked"],
                   "%s: alpha still driven by the texture" % m["name"])
             check(m["render_method"] == 'BLENDED',
                   "%s: render method %s" % (m["name"], m["render_method"]))
-            check(m["diffuse_alpha"] == 0.0,
-                  "%s: viewport colour alpha %s" % (m["name"], m["diffuse_alpha"]))
+            check(m["diffuse_alpha"] == 0.5,
+                  "%s: viewport colour alpha %s"
+                  % (m["name"], m["diffuse_alpha"]))
+            check(m["diffuse_colour"] == (0.0, 1.0, 0.0),
+                  "%s: viewport colour %s, expected green"
+                  % (m["name"], m["diffuse_colour"]))
             check(m["xp2b_draw"] is False,
                   "%s: xplane.draw is %s, expected False"
                   % (m["name"], m["xp2b_draw"]))

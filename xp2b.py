@@ -15,7 +15,9 @@ What survives the conversion
 * the ``ANIM`` nesting, as an Empty chain (static ``ANIM_trans`` / ``ANIM_rotate``
   become plain transforms, keyed tables become dataref + keyframes)
 * ``ANIM_hide`` / ``ANIM_show`` as XP2B ``hide`` / ``show`` datarefs
-* ``ATTR_draw_disable`` as a material copy with ``draw = False``
+* ``ATTR_draw_disable`` / ``ATTR_solid_camera`` as a material copy with
+  ``draw`` / ``solid_camera`` set, painted green (no draw) or red (camera
+  collision) in the viewport so the geometry X-Plane hides stays recognisable
 * ``ATTR_light_level`` as the material's light-level fields
 * ``ATTR_cockpit`` / ``_lit_only`` / ``_region`` / ``_device`` /
   ``ATTR_no_cockpit`` as the material's *Cockpit Feature* plus the layer's
@@ -109,27 +111,70 @@ def bone_support():
 # small builders
 # ---------------------------------------------------------------------------
 
-def _make_transparent(mat):
-    """Drive a material to alpha 0, in the viewport, Solid mode and renders.
+#: What a material the sim never draws looks like in Blender: ``(colour,
+#: alpha)``.  The colour says *why* the part is invisible, so a collision proxy
+#: can be told from a shadow caster in the viewport.  Viewport-only state - the
+#: export writes the switches from ``material.xplane`` and never reads a shader.
+STATE_LOOK = {
+    "no_draw": ((0.0, 1.0, 0.0), 0.5),
+    "camera_collision": ((1.0, 0.0, 0.0), 0.1),
+}
 
-    The alpha link has to be cut first: a texture's alpha channel wired into
-    the BSDF wins over the socket value, so setting 0 alone would leave the
-    object exactly as visible as it was.
+#: one roughness for both looks, so the difference between them is only colour
+#: and alpha
+STATE_ROUGHNESS = 0.3
+
+
+def _state_look(mat):
+    """Which look a material earns from its XP2B switches, or ``None``.
+
+    Camera collision wins over no-draw: a proxy that carries both is a
+    collision proxy, and that is the distinction worth seeing.
     """
-    if mat is None or not mat.use_nodes or not mat.node_tree:
-        return
+    if mat is None:
+        return None
+    xp = getattr(mat, "xplane", None)
+    if xp is None:
+        return None
+    if xp.solid_camera:
+        return STATE_LOOK["camera_collision"]
+    if xp.draw is False:
+        return STATE_LOOK["no_draw"]
+    return None
+
+
+def _paint_state(mat):
+    """Colour a material the sim does not draw, so the part is recognisable.
+
+    Both links into the Principled BSDF have to be cut first: a texture's base
+    colour or its alpha channel wins over the socket value, so setting the
+    sockets alone leaves the object looking exactly as it did.
+    """
+    look = _state_look(mat)
+    if look is None or not mat.use_nodes or not mat.node_tree:
+        return False
+    colour, alpha = look
     nt = mat.node_tree
     bsdf = next((n for n in nt.nodes
                  if n.bl_idname == 'ShaderNodeBsdfPrincipled'), None)
     if bsdf is None:
-        return
+        return False
     for link in list(nt.links):
         # compare with == and not `is`: Blender hands out a fresh Python wrapper
         # for a node on every access, so an identity check silently misses the
-        # link and the texture's alpha keeps winning over the socket value
-        if link.to_node == bsdf and link.to_socket.name == 'Alpha':
+        # link and the texture keeps winning over the socket value
+        if link.to_node == bsdf and link.to_socket.name in ('Base Color',
+                                                            'Alpha'):
             nt.links.remove(link)
-    bsdf.inputs['Alpha'].default_value = 0.0
+    base = bsdf.inputs.get('Base Color')
+    if base is not None:
+        base.default_value = colour + (1.0,)
+    alpha_socket = bsdf.inputs.get('Alpha')
+    if alpha_socket is not None:
+        alpha_socket.default_value = alpha
+    rough = bsdf.inputs.get('Roughness')
+    if rough is not None:
+        rough.default_value = STATE_ROUGHNESS
     try:
         mat.surface_render_method = 'BLENDED'
     except (AttributeError, TypeError):
@@ -138,9 +183,10 @@ def _make_transparent(mat):
         except (AttributeError, TypeError):
             pass
     try:
-        mat.diffuse_color = (0.0, 0.0, 0.0, 0.0)
+        mat.diffuse_color = colour + (alpha,)
     except (AttributeError, TypeError):
         pass
+    return True
 
 
 #: XPlane2Blender's Material > X-Plane > Surface Type, in the order X-Plane
@@ -1120,6 +1166,7 @@ class _Converter(object):
             made += 1
 
         self._apply_magnets(obj8, leaf_objs)
+        self._paint_state_materials(coll)
 
         if not made and not lights_made and not emitters_made:
             self.warn("%s: no geometry was moved" % base)
@@ -1132,6 +1179,27 @@ class _Converter(object):
                                 "on bones" % (len(self.specs), self.root.name,
                                               self.visibility_placed))
         return coll
+
+    def _paint_state_materials(self, coll):
+        """Colour every material the converted file keeps out of the picture.
+
+        Read once at the end, not while a batch is applied: ``draw`` and
+        ``solid_camera`` are two independent switches a file can set on the
+        same material in different batches, and a clone inherits whatever the
+        material it was copied from carried - so only the finished pair says
+        what the export will write.
+        """
+        painted = 0
+        seen = set()
+        for ob in coll.objects:
+            for slot in getattr(ob, "material_slots", ()):
+                mat = slot.material
+                if mat is None or mat.as_pointer() in seen:
+                    continue
+                seen.add(mat.as_pointer())
+                if _paint_state(mat):
+                    painted += 1
+        return painted
 
     def _apply_texture_options(self, obj8, coll):
         """Hand the file's texture set to XPlane2Blender's layer.
@@ -1566,14 +1634,12 @@ class _Converter(object):
         """ATTR_draw_disable -> a material copy with XP2B draw = False.
 
         X-Plane never draws these objects (collision boxes, shadow casters,
-        invisible walls), so the copy is made fully transparent as well.  The
-        checkbox in XPlane2Blender's panel is what keeps them out of the
-        *exported* file; alpha 0 is what keeps the solid block out of the
-        viewport and any render of the scene.
+        invisible walls).  The checkbox in XPlane2Blender's panel is what keeps
+        them out of the *exported* file; the green, half-transparent look the
+        end of the conversion paints on them is what keeps them recognisable in
+        the viewport instead of looking like a drawing surface.
         """
         self._material_set(ob, [("draw", False)], "nodraw")
-        for slot in ob.material_slots:
-            _make_transparent(slot.material)
 
     def _set_backface_culling(self, ob, cull, tag):
         """ATTR_cull / ATTR_no_cull -> Blender's flag, and back out again.
@@ -2225,14 +2291,6 @@ class _Converter(object):
                 clone.name = mat.name + "_" + tag
                 for name, value in pairs:
                     setattr(clone.xplane, name, value)
-                if any(name == "solid_camera" and value for name, value in pairs):
-                    # ATTR_solid_camera marks a collision proxy: the sim uses it
-                    # for camera hits and never draws it, so it should not sit
-                    # in the way in the viewport either.  Setting the alpha to 0
-                    # leaves the geometry selectable; the export writes
-                    # ATTR_solid_camera back unchanged, because that lives on
-                    # xplane.solid_camera and not in the material graph.
-                    _make_transparent(clone)
                 self.material_cache[slot_key] = clone
             slot.material = clone
 

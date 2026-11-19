@@ -1,0 +1,44 @@
+I
+800
+OBJ
+
+# Fixture: the two X-Plane material switches that keep geometry out of the
+# picture, and their combination.  Five quads on one texture: plain,
+# ATTR_solid_camera (camera collision), ATTR_no_solid_camera (plain again),
+# ATTR_draw_disable (no draw), then both together.  The conversion has to hand
+# out a material copy per state and colour them apart - green at 50 percent for
+# "no draw", red at 10 percent for camera collision - so a collision proxy can
+# be told from a drawing surface in the viewport.
+TEXTURE	mini.png
+POINT_COUNTS	20 0 0 10
+
+VT	0	0	0	0	1	0	0	0
+VT	1	0	0	0	1	0	1	0
+VT	1	0	1	0	1	0	1	1
+VT	0	0	1	0	1	0	0	1
+VT	1	0	0	0	1	0	0	0
+VT	2	0	0	0	1	0	1	0
+VT	2	0	1	0	1	0	1	1
+VT	1	0	1	0	1	0	0	1
+VT	2	0	0	0	1	0	0	0
+VT	3	0	0	0	1	0	1	0
+VT	3	0	1	0	1	0	1	1
+VT	2	0	1	0	1	0	0	1
+VT	3	0	0	0	1	0	0	0
+VT	4	0	0	0	1	0	1	0
+VT	4	0	1	0	1	0	1	1
+VT	3	0	1	0	1	0	0	1
+VT	4	0	0	0	1	0	0	0
+VT	5	0	0	0	1	0	1	0
+VT	5	0	1	0	1	0	1	1
+VT	4	0	1	0	1	0	0	1
+IDX10	0 1 2 0 2 3 4 5 6 4 6 7 8 9 10 8 10 11 12 13 14 12 14 15 16 17 18 16 18 19
+TRIS	0	6
+ATTR_solid_camera
+TRIS	6	6
+ATTR_no_solid_camera
+TRIS	12	6
+ATTR_draw_disable
+TRIS	18	6
+ATTR_solid_camera
+TRIS	24	6

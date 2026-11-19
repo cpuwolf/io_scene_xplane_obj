@@ -18,11 +18,11 @@ lights, LODs) is what it is good at — nothing here writes a `.obj` itself.
 | `ANIM_rotate_begin` + keys | `rotation_mode = AXIS_ANGLE`, the file's axis verbatim |
 | static `ANIM_trans` / `ANIM_rotate` | plain transforms |
 | `ANIM_show` / `ANIM_hide` | `show` / `hide` datarefs on the **innermost bone of the block**, so the rule scopes to that subtree |
-| `ATTR_draw_disable` | a material clone with *Draw Objects With This Material* off |
+| `ATTR_draw_disable` | a material clone with *Draw Objects With This Material* off, painted green at 50 % in the viewport |
 | `ATTR_blend` / `ATTR_no_blend [ratio]` / `ATTR_shadow_blend ratio` | the material's *Blend Mode* and *Alpha Cutoff Ratio* |
 | `ATTR_shadow` / `ATTR_no_shadow` | the material's *Shadow Local* |
 | `ATTR_poly_os n` / `ATTR_no_poly_os` | the material's *Polygon Offset* |
-| `ATTR_solid_camera` | the material's *Camera Collision* |
+| `ATTR_solid_camera` | the material's *Camera Collision*, painted red at 10 % in the viewport (it wins over no-draw) |
 | `ATTR_cockpit*` | the material's *Cockpit Feature* (`Panel Texture` / `Cockpit Device`) plus the layer's *Panel Texture Mode*; `COCKPIT_REGION` becomes the layer's region table |
 | `ATTR_light_level` | the **object's** *X-Plane > Light Levels > Override Light Level* (value1 / value2 / dataref) |
 | `ATTR_manip_*` | `object.xplane.manip` (command family, toggle, push, radio, delta/wrap, drag axis, drag rotate) |

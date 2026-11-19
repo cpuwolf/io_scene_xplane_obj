@@ -5,6 +5,21 @@ textures intact — and exported again through XPlane2Blender in the same instal
 
 <img src="blender_b737_demo.gif" width="800" alt="Boeing 737-800 cockpit imported into Blender: bone rig over solid view, then the textured material preview, then wireframe">
 
+## What X-Plane hides stays workable
+
+<img src="mani2.jpg" width="960" alt="A closed cockpit imported into Blender: the collision shell drawn red at 10 % alpha, the manipulator plates green at 50 %, everything else textured as usual">
+
+*Draw objects with this material* off and *Camera collision* are the two switches
+that keep a part out of X-Plane's picture — a cockpit shell, a shadow caster, a
+manipulator plate you click but never see. Both used to import fully transparent,
+so a collision shell was indistinguishable from a shadow caster and the parts
+inside it were hard to pick. Since **0.13.2** they are marked instead: green at
+50 % alpha for no-draw, red at 10 % for camera collision (it wins when a batch
+carries both), roughness 0.3 on either. Still see-through, so the viewport shows
+what the sim shows — nothing drawn there — but every part now says which kind of
+nothing it is. The closed cockpit above is exactly that: red proxies around the
+shell, green manipulator plates inside.
+
 ## Features
 
 | | in Blender | on export |
@@ -20,7 +35,10 @@ UVs exact, one mesh per geometry command; all manipulator families
 manipulator settings; cockpit panels and devices (`ATTR_cockpit*`,
 `COCKPIT_REGION`, panel texture mode); `ATTR_light_level` as the object's override
 light level; `ATTR_LOD`, `ATTR_draw_disable`, culling, `ATTR_solid_camera`,
-`ATTR_shiny_rat`. A whole aircraft comes in from its `.acf` — every attached
+`ATTR_shiny_rat` — the two switches that keep geometry out of X-Plane's picture
+are painted in the viewport (green at 50 % for no-draw, red at 10 % for camera
+collision) so the parts stay findable instead of looking like a drawing surface.
+A whole aircraft comes in from its `.acf` — every attached
 `objects/*.obj` as one collection under the aircraft's name (Laminar C172: 42 of
 42 found).
 

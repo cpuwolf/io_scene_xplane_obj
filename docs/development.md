@@ -21,6 +21,8 @@ python3 verify/namecheck.py [dist/<id>-<ver>.zip]   # no module uses a name it n
 blender -b --factory-startup --python verify/material_combo_test.py   # combo map, texture + light-level fields, XP2B output
 blender -b --factory-startup --python verify/blend_test.py            # blend mode + alpha cutoff ratio round trip
 blender -b --factory-startup --python verify/lights_test.py           # light colour/power/cone/aim + the export it must not change
+blender -b --factory-startup --python verify/nodraw_test.py           # ATTR_draw_disable -> draw off, green, alpha 0.5
+blender -b --factory-startup --python verify/nodraw_camera_test.py    # no-draw vs camera-collision colour per material state
 blender -b --factory-startup --python verify/check_bones_xp2b.py -- <file.obj>  # animation -> bones -> XP2B
 blender -b --factory-startup --python verify/check_cockpit.py -- <file.obj>     # ATTR_cockpit* -> cockpit feature
 blender -b --factory-startup --python verify/check_placement.py -- <file.obj>   # each batch where the file puts it
