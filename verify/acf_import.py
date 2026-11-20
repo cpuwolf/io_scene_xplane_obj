@@ -105,6 +105,21 @@ def parent_of(coll, parents):
     return None
 
 
+def under_aircraft(coll, parents):
+    """The aircraft collection `coll` sits under, at any depth.
+
+    Wreckage lives one level deeper than the rest (its own `Wreckage` collection,
+    inside the aircraft), so a direct-children test would read that as "not part
+    of this aircraft" and fail a correct import.
+    """
+    for parent in parents:
+        if coll is parent:
+            return parent.name
+        if coll.name in [c.name for c in parent.children_recursive]:
+            return parent.name
+    return None
+
+
 print("\nresult: %s in %.1fs" % (result, elapsed), flush=True)
 print("collections: %d (%d exportable, %d .acf parent)"
       % (len(bpy.data.collections), len(exportable), len(parents)), flush=True)
@@ -126,9 +141,25 @@ if error:
 # exactly that collection (not at the scene root)
 named = [c for c in parents
          if c.name in [os.path.basename(a) for a in ACFS]]
-nested = [c for c in exportable if parent_of(c, named)]
+nested = [c for c in exportable if under_aircraft(c, named)]
 print("acf parents matching the input: %d, exportable under one: %d/%d"
       % (len(named), len(nested), len(exportable)), flush=True)
+
+# wreckage starts excluded from the view layer (the sim only draws it after a
+# crash), which takes it out of the exporter's list too - so turn it back on
+# before counting roots: this check is about nesting, not about what is hidden
+reenabled = 0
+for parent in named:
+    for child in parent.children_recursive:
+        if not child.name.startswith(getattr(M, "WRECKAGE_GROUP", "Wreckage")):
+            continue
+        layer_coll = M._layer_collection(bpy.context.view_layer, child)
+        if layer_coll is not None and layer_coll.exclude:
+            layer_coll.exclude = False
+            reenabled += len(child.children)
+if reenabled:
+    print("wreckage: %d collection(s) re-enabled for the export count" % reenabled,
+          flush=True)
 
 # nesting must not hide a root from the exporter: XP2B walks collections
 # recursively, so it has to find every layer inside the .acf collection

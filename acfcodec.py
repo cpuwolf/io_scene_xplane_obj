@@ -46,6 +46,16 @@ OBJ_SECTION = "_obja"
 FLAGS_FIELD = "_obj_flags"
 COCKPIT_BITS = (1 << 11) | (1 << 12)
 
+#: `wreckage` is Plane-Maker's own word for this bit (its tooltip in the Plane
+#: Maker binary: "Check this if this object is only shown when the aircraft is
+#: destroyed. THIS OBJ MUST THEN BE ATTACHED TO WING 1 LEFT OR RIGHT, H-STAB LEFT
+#: OR RIGHT, VERT STAB 1 OR 2, OR BODY 1 TO RENDER IN THE SIM!").  Set on every
+#: `wreck_*` / `broken_*` object in the 26 .acf files on hand and on nothing else
+#: (34 objects, 8 aircraft), and each of them carries the part it is attached to
+#: in `_v10_att_wing` / `_v10_att_body` - never -1, exactly as the tooltip
+#: requires.  Nothing in the .obj says this: it exists only in the .acf.
+WRECKAGE_BIT = 1 << 9
+
 OBJ_EXT = ".obj"
 
 # the two folders X-Plane resolves an attached object against, in its order
@@ -179,6 +189,30 @@ def is_cockpit(bits):
     return bool(bits & COCKPIT_BITS)
 
 
+def is_wreckage(bits):
+    """Is this `_obj_flags` value a wreckage object (only drawn when destroyed)?"""
+    return bool(bits & WRECKAGE_BIT)
+
+
+def _flagged_objects(acf_path, wanted_bits):
+    """The resolved paths whose slot has any bit of `wanted_bits` set."""
+    try:
+        text = read_text(acf_path)
+    except (OSError, ValueError):
+        return set()
+    wanted = {slot for slot, bits in flags(text).items() if bits & wanted_bits}
+    if not wanted:
+        return set()
+    found = set()
+    for slot, raw in slots(text):
+        if slot not in wanted:
+            continue
+        hit = _find(acf_path, raw)
+        if hit is not None:
+            found.add(os.path.normcase(hit))
+    return found
+
+
 def cockpit_objects(acf_path):
     """The resolved paths this .acf attaches as a cockpit object (INN and/or OUT).
 
@@ -190,21 +224,18 @@ def cockpit_objects(acf_path):
     views sets both bits on that one slot, and some attach the same file twice
     (once as INN, once as OUT) - the set holds it once either way.
     """
-    try:
-        text = read_text(acf_path)
-    except (OSError, ValueError):
-        return set()
-    wanted = {slot for slot, bits in flags(text).items() if is_cockpit(bits)}
-    if not wanted:
-        return set()
-    found = set()
-    for slot, raw in slots(text):
-        if slot not in wanted:
-            continue
-        hit = _find(acf_path, raw)
-        if hit is not None:
-            found.add(os.path.normcase(hit))
-    return found
+    return _flagged_objects(acf_path, COCKPIT_BITS)
+
+
+def wreckage_objects(acf_path):
+    """The resolved paths this .acf attaches as wreckage.
+
+    The sim only draws these once the aircraft has been destroyed, and it does so
+    on the part each one is attached to.  They are the one group of objects an
+    author almost never wants to look at while working on the aeroplane, so the
+    import keeps them in a collection of their own - see `WRECKAGE_TAG`.
+    """
+    return _flagged_objects(acf_path, WRECKAGE_BIT)
 
 
 #: the CG, in feet, in the same authoring-point frame the `_obja` offsets use.

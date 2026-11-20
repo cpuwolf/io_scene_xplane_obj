@@ -69,6 +69,17 @@ _obja/0/_v10_att_file_stl ../Cessna_172SP_cockpit.obj
   clickspot can live, and an untagged one cannot. The tag is a display-only
   outliner colour (`COLOR_04`) — it changes nothing about the export, the layer
   name still carries the file name.
+* **Wreckage goes into its own `Wreckage` collection, excluded from the view
+  layer.** Plane Maker's `wreckage` checkbox is `_obj_flags` bit 9: the sim draws
+  those objects only after the aircraft is destroyed, and they sit exactly where
+  the intact parts sit, so they are noise while you work. They get an orange
+  (`COLOR_02`) collection of their own, and it starts *excluded* — which also
+  takes them out of the depsgraph and out of XPlane2Blender's export list, since
+  it skips whatever the view layer does not show. Re-enable the collection to get
+  them back, and remember they are not being exported while it is off (the
+  import's summary message says how many). Which objects are wreckage is read
+  from the `.acf` and nothing else — no `.obj` carries the mark, and their file
+  names are no guide (`broken_*`, `wreck_*`, and F-4's `F4_wrek/`).
 * The `.acf` is **only read**. Laminar asks that add-ons not write the format,
   because it changes between sim versions, and this importer has no reason to.
 * **It takes a while (13 to 113 objects), so it reports where it is**: the status
