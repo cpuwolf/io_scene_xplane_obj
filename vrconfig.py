@@ -310,6 +310,150 @@ def to_bl(vec):
     return (vec[0], -vec[2], vec[1])
 
 
+def to_xp(vec):
+    """Blender (x, y, z) -> X-Plane (x, y, z); the inverse of :func:`to_bl`."""
+    return (vec[0], vec[2], -vec[1])
+
+
+def angles_from_vectors(forward, up):
+    """PSI/THE/PHI (degrees) from a forward and an up vector, X-Plane axes.
+
+    The inverse of :func:`view_vectors`: PSI is 0-360, THE -90..90, PHI
+    -180..180, which is what the format documents.  Used when a camera has been
+    moved in Blender and the block has to be written back.
+    """
+    fx, fy, fz = forward
+    length = math.sqrt(fx * fx + fy * fy + fz * fz) or 1.0
+    fx, fy, fz = fx / length, fy / length, fz / length
+    psi = math.degrees(math.atan2(fx, -fz)) % 360.0
+    the = math.degrees(math.asin(max(-1.0, min(1.0, fy))))
+
+    # the "up" a camera would have with no roll, and the axis it rolls about
+    d = fy                                  # world up . forward
+    up_ref = (0.0 - fx * d, 1.0 - fy * d, 0.0 - fz * d)
+    n = math.sqrt(sum(c * c for c in up_ref))
+    if n < 1e-9:                            # looking straight up or down
+        up_ref = (0.0, 0.0, 1.0)
+    else:
+        up_ref = tuple(c / n for c in up_ref)
+    right = (fy * up_ref[2] - fz * up_ref[1],
+             fz * up_ref[0] - fx * up_ref[2],
+             fx * up_ref[1] - fy * up_ref[0])
+    ux, uy, uz = up
+    un = math.sqrt(ux * ux + uy * uy + uz * uz) or 1.0
+    ux, uy, uz = ux / un, uy / un, uz / un
+    phi = math.degrees(math.atan2(ux * right[0] + uy * right[1] + uz * right[2],
+                                 ux * up_ref[0] + uy * up_ref[1] + uz * up_ref[2]))
+    if phi <= -180.0:
+        phi += 360.0
+    return psi, the, phi
+
+
+# ---------------------------------------------------------------------------
+# writing: only the lines that changed, in the author's own style
+# ---------------------------------------------------------------------------
+
+_SEP = re.compile(r"[ \t]*,[ \t]*|[ \t]+")
+
+
+def _split_numbers(text):
+    """(leading whitespace, [raw number tokens], separators) of a directive."""
+    stripped = text.rstrip()
+    lead = stripped[:len(stripped) - len(stripped.lstrip())]
+    words = _SEP.split(stripped.strip())
+    return lead, words
+
+
+def format_like(old_token, value):
+    """Write `value` the way `old_token` was written.
+
+    The author's own shape is content: ``-0.3658,`` keeps four decimals and its
+    comma, ``-3.0`` stays signed and one-decimal, ``2`` stays an integer *if* the
+    new value is one.  Without this a one-number edit rewrites every line of the
+    block and the diff is unreadable.
+    """
+    token = old_token
+    tail = ""
+    while token and token[-1] in ",;":
+        tail = token[-1] + tail
+        token = token[:-1]
+    body = token.lstrip("+-")
+    decimals = len(body.split(".")[1]) if "." in body else 0
+    text = "%.*f" % (decimals, value)
+    if abs(float(text) - value) > 5e-5:      # the original had too few digits
+        text = "%.6f" % value
+        text = text.rstrip("0").rstrip(".") or "0"
+    return text + tail
+
+
+def _emit(old_line, keyword, values):
+    """One directive line with new numbers, keeping its indent and separators."""
+    lead, words = _split_numbers(old_line)
+    nums = [w for w in words[1:] if _NUM.match(w.replace(",", ""))]
+    if not nums:                             # the directive had no numbers yet
+        joined = " ".join("%.4f" % v for v in values)
+        return "%s%s %s" % (lead, keyword, joined)
+    # the gap between the keyword and its first number is its own separator
+    # (`DEG_PER_ACTION\t30` is a tab), the one between the numbers is `sep`
+    m = re.match(r"\s*\S+(\s+)\S", old_line)
+    gap = m.group(1) if m else " "
+    sep = "\t" if "\t" in old_line else (", " if "," in old_line else " ")
+    parts = []
+    for i, value in enumerate(values):
+        old = nums[i] if i < len(nums) else nums[-1]
+        parts.append(format_like(old, value))
+    # keep whatever followed the last number (a comment, for instance)
+    tail = ""
+    m = re.search(r"\s+#.*$", old_line)
+    if m:
+        tail = m.group(0)
+    return "%s%s%s%s%s" % (lead, keyword, gap, sep.join(parts), tail)
+
+
+def rewrite_lines(lines, keyword, values):
+    """`lines` with the `keyword` directive carrying `values`; others verbatim."""
+    out = []
+    done = False
+    for line in lines:
+        words = line.strip().split()
+        if words and words[0] == keyword:
+            out.append(_emit(line, keyword, values))
+            done = True
+        else:
+            out.append(line)
+    if not done:
+        # insert before the END line, at the same indent the block uses
+        indent = ""
+        for line in lines[1:]:
+            if line.strip() and not line.strip().startswith("END_"):
+                indent = line[:len(line) - len(line.lstrip())]
+                break
+        new = _emit(indent + keyword + " 0", keyword, values)
+        if out and out[-1].strip().startswith("END_"):
+            out.insert(len(out) - 1, new)
+        else:
+            out.append(new)
+    return out
+
+
+def splice(vr, edits):
+    """The file's text with some blocks replaced; everything else byte-identical.
+
+    `edits` is ``[(block, new_lines)]`` where `block` is a Hotspot or a Manip
+    (their `first_line` / `lines` say where they are).  Replacements are applied
+    bottom-up so earlier line numbers stay valid.
+    """
+    lines = list(vr.lines)
+    for block, new_lines in sorted(edits, key=lambda e: -e[0].first_line):
+        start = block.first_line
+        count = len(block.lines)
+        if lines[start:start + count] == list(new_lines):
+            continue
+        lines[start:start + count] = list(new_lines)
+    body = vr.ending.join(lines)
+    return body + vr.ending if vr.trailing else body
+
+
 def parse_text(text, path=""):
     """Parse a vrconfig file that is already in memory."""
     vr = VrConfig()

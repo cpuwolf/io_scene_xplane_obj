@@ -35,6 +35,9 @@ blender -b --factory-startup --python verify/acf_import.py -- <file.acf>        
 blender -b --factory-startup --python verify/export_snapshot.py -- <in.obj> <out.txt>  # one file's export text, to diff before/after
 blender -b --factory-startup --python verify/weld_test.py [-- <file.obj>]        # weld_vertices: corners keep their UV + normal
 blender -b --factory-startup --python verify/vrconfig_blend_test.py -- <file.acf>  # vrconfig hotspots land in the cockpit (ray cast)
+blender -b --factory-startup --python verify/vrconfig_save_test.py -- <file.acf>   # moving a hotspot rewrites one line, on a copy of the file
+blender -b --factory-startup --python verify/vr_manip_leak_test.py -- <file.obj>   # the vr_manips tag does not reach the exported .obj
+blender -b --python verify/installed_probe.py                                     # no --factory-startup: is the installed copy this tree?
 ```
 
 `acf_import.py` loads this working tree by path, so it grades the code you are

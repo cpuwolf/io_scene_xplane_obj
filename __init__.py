@@ -212,6 +212,11 @@ def _aircraft_collections():
     return [c for c in bpy.data.collections if c.get(acfplace.PROP_SOURCE)]
 
 
+def _vr_collections():
+    """Every collection built from a ``_vrconfig.txt``."""
+    return [c for c in bpy.data.collections if c.get(XVR.PROP_SOURCE)]
+
+
 def _remember_aircraft(coll, acf_path):
     """Record on the aircraft's collection what its .acf says about placement."""
     from . import acfplace
@@ -1274,6 +1279,78 @@ class VIEW3D_PT_xplane_aircraft_placement(bpy.types.Panel):
                          ).coll_name = coll.name
             if on:
                 box.label(text="clear before exporting .obj", icon='ERROR')
+
+
+@_add
+class OBJECT_OT_xp8_vrconfig_save(bpy.types.Operator):
+    """Write the moved VR hotspots back into the aircraft's vrconfig"""
+    bl_idname = "object.xp8_vrconfig_save"
+    bl_label = "Save VR Config"
+    bl_description = ("Write the hotspots that moved back into <acf>_vrconfig.txt. "
+                      "Only the directives that changed are rewritten - comments, "
+                      "block order and every untouched block stay as they are")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    coll_name: StringProperty(name="VR collection", default="")
+
+    @classmethod
+    def poll(cls, context):
+        return bool(_vr_collections())
+
+    def execute(self, context):
+        target = self.coll_name
+        collections = [c for c in _vr_collections() if c.name == target] \
+            if target else _vr_collections()
+        if not collections:
+            self.report({'ERROR'}, "no VR configuration in this scene")
+            return {'CANCELLED'}
+        # a camera moved in the viewport reaches `matrix_world` on the next
+        # evaluation, and the save reads exactly that
+        context.view_layer.update()
+        wrote = 0
+        for coll in collections:
+            wrote += XVR.save(context, coll, self.report)["written"]
+        if wrote:
+            self.report({'INFO'}, "wrote %d hotspot(s)" % wrote)
+        return {'FINISHED'}
+
+
+@_add
+class VIEW3D_PT_xplane_vr(bpy.types.Panel):
+    """The VR configuration this aircraft brought in, and how to save it back"""
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "X-Plane"
+    bl_label = "VR hotspots"
+
+    @classmethod
+    def poll(cls, context):
+        return bool(_vr_collections())
+
+    def draw(self, context):
+        layout = self.layout
+        for coll in _vr_collections():
+            box = layout.box()
+            box.label(text=coll.name, icon='CAMERA_DATA')
+            origin = XVR.origin_of(coll)
+            box.label(text="origin: %s" % origin.get("note", origin.get("kind")))
+            stored = json.loads(coll.get(XVR.PROP_HOTSPOTS) or "[]")
+            manips = json.loads(coll.get(XVR.PROP_MANIPS) or "[]")
+            missing = [m for m in manips if not m.get("objects")]
+            box.label(text="%d hotspot(s)   %d manipulator(s)"
+                      % (len(stored), len(manips)))
+            if missing:
+                box.label(text="%d manipulator(s) have no geometry" % len(missing),
+                          icon='ERROR')
+            moved = XVR.changes(coll)
+            row = box.row()
+            row.operator("object.xp8_vrconfig_save",
+                         text="Save %d change(s)" % len(moved) if moved
+                         else "Save VR Config",
+                         icon='FILE_TICK' if moved else 'IMPORT')
+            if moved:
+                box.label(text="moved: %s"
+                          % ", ".join(name for name, _diff in moved[:3]))
 
 
 def register():

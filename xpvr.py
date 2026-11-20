@@ -13,9 +13,9 @@ What this builds, per aircraft:
     └ ...
 
 and stores the file's own text plus the resolved table on the collection, so a
-later write-back can replace only the blocks that changed.  **Read-only**: this
-iteration imports, it does not save.  Moving a camera changes nothing on disk,
-which is why the collection is tagged ``vr_readonly``.
+write-back can replace only the blocks that changed.  Saving re-reads the scene,
+patches the file and refuses when the file moved on disk since the import; see
+:func:`save`.
 
 Two things are deliberately *not* inside the aircraft collection:
 
@@ -44,10 +44,10 @@ from . import vrconfig
 #: what the collection and its objects carry
 PROP_SOURCE = "vrconfig_source"
 PROP_DUMP = "vrconfig_dump"
+PROP_HASH = "vrconfig_hash"
 PROP_ORIGIN = "vrconfig_origin"
 PROP_HOTSPOTS = "vrconfig_hotspots"
 PROP_MANIPS = "vrconfig_manips"
-PROP_READONLY = "vr_readonly"
 PROP_AIRCRAFT = "vr_aircraft"
 PROP_HOTSPOT = "vr_hotspot"
 PROP_KIND = "vr_kind"
@@ -87,9 +87,15 @@ def _collection(context, name, parent):
 
 
 def _box_object(coll, name, size, centre, material):
-    """An axis-aligned box, drawn as a wireframe in Solid and translucent in EEVEE."""
-    sx, sy, sz = (max(v, 1e-4) / 2.0 for v in size)
-    verts = [(x * sx, y * sy, z * sz) for x, y, z in _CUBE_VERTS]
+    """An axis-aligned box, drawn as a wireframe in Solid and translucent in EEVEE.
+
+    `size` is in X-Plane order (x, y, z); the mesh is built in Blender axes, which
+    swap the last two - X-Plane (x, y, z) is Blender (x, -z, y) - so a hotspot
+    that is 0.6 m wide and 0.2 m tall is 0.6 x 0.6 x 0.2 in the mesh.
+    """
+    sx, sy, sz = size[0], size[2], size[1]
+    hx, hy, hz = max(sx, 1e-4) / 2.0, max(sy, 1e-4) / 2.0, max(sz, 1e-4) / 2.0
+    verts = [(x * hx, y * hy, z * hz) for x, y, z in _CUBE_VERTS]
     me = bpy.data.meshes.new(name)
     me.from_pydata(verts, [], _CUBE_FACES)
     me.update()
@@ -220,8 +226,8 @@ def build(context, aircraft_coll, acf_path, report=None):
     coll = _collection(context, name, None)
     coll[PROP_SOURCE] = path
     coll[PROP_DUMP] = vr.text()
+    coll[PROP_HASH] = _digest(vr.text().encode("utf-8"))
     coll[PROP_ORIGIN] = json.dumps(origin)
-    coll[PROP_READONLY] = True
     coll[PROP_AIRCRAFT] = aircraft_coll.name if aircraft_coll else ""
 
     material = _aabb_material()
@@ -285,3 +291,189 @@ def build(context, aircraft_coll, acf_path, report=None):
 def _with_origin(point, origin):
     ox, oy, oz = origin["offset"]
     return (point[0] + ox, point[1] + oy, point[2] + oz)
+
+
+def _from_origin(point, origin):
+    ox, oy, oz = origin["offset"]
+    return (point[0] - ox, point[1] - oy, point[2] - oz)
+
+
+# ---------------------------------------------------------------------------
+# saving: read the scene back, diff it against what was imported, patch the file
+# ---------------------------------------------------------------------------
+
+#: how far a value may drift before it counts as an edit, in metres/degrees.
+#: float32 storage in Blender moves a number by ~1e-7, far below this.
+EPS = 1e-4
+
+
+def origin_of(coll):
+    """The origin the import used, as stored on the collection."""
+    raw = coll.get(PROP_ORIGIN)
+    try:
+        return json.loads(raw) if raw else {"kind": "cg", "offset": (0.0, 0.0, 0.0)}
+    except ValueError:
+        return {"kind": "cg", "offset": (0.0, 0.0, 0.0)}
+
+
+def _camera_angles(ob):
+    """PSI/THE/PHI in degrees for a hotspot camera, from its world matrix."""
+    rot = ob.matrix_world.to_3x3()
+    forward = vrconfig.to_xp(-(rot @ Vector((0.0, 0.0, 1.0))))
+    up = vrconfig.to_xp(rot @ Vector((0.0, 1.0, 0.0)))
+    return vrconfig.angles_from_vectors(forward, up)
+
+
+def _close(a, b, eps=EPS):
+    return all(abs(x - y) <= eps for x, y in zip(a, b))
+
+
+def _box_aabb(ob):
+    """(centre in Blender world, extents in X-Plane order) of the AABB box."""
+    size = tuple(ob.dimensions)              # Blender (x, y, z)
+    return (tuple(ob.matrix_world.translation),
+            (size[0], size[2], size[1]))     # -> X-Plane (x, y, z)
+
+
+def changes(coll):
+    """What the scene says now, per hotspot, compared with what was imported.
+
+    Returns ``[(name, {"xyz": [...], "angles": [...], "aabb": [...]})]`` - only
+    the directives that moved.  An untouched camera contributes nothing, so an
+    untouched file is not rewritten at all.
+    """
+    origin = origin_of(coll)
+    stored = json.loads(coll.get(PROP_HOTSPOTS) or "[]")
+    out = []
+    for entry in stored:
+        cam = bpy.data.objects.get(entry.get("camera") or "")
+        if cam is None:
+            continue
+        diff = {}
+        position = vrconfig.to_xp(tuple(cam.matrix_world.translation))
+        if not _close(_from_origin(position, origin), entry.get("xyz") or ()):
+            diff["PRESET_XYZ"] = list(_from_origin(position, origin))
+        angles = _camera_angles(cam)
+        old_angles = entry.get("angles") or (0.0, 0.0, 0.0)
+        # PSI is 0-360 in the format and wraps, so a jump of 359.9 degrees is a
+        # tenth of a degree of movement; compare it on the circle.
+        same_psi = min(abs(angles[0] - old_angles[0]),
+                       360.0 - abs(angles[0] - old_angles[0])) <= EPS
+        if not (same_psi and _close(angles[1:], old_angles[1:])):
+            diff["PRESET_PSI"] = angles[0]
+            diff["PRESET_THE"] = angles[1]
+            diff["PRESET_PHI"] = angles[2]
+        box = bpy.data.objects.get(entry.get("box") or "")
+        if box is not None and entry.get("aabb"):
+            centre, ext = _box_aabb(box)
+            centre_xp = _from_origin(vrconfig.to_xp(centre), origin)
+            half = tuple(v / 2.0 for v in ext)
+            # the AABB is axis-aligned in aircraft coordinates, so min/max are
+            # simply the centre give or take half the extents
+            want = (centre_xp[0] - half[0], centre_xp[1] - half[1],
+                    centre_xp[2] - half[2],
+                    centre_xp[0] + half[0], centre_xp[1] + half[1],
+                    centre_xp[2] + half[2])
+            if not _close(want, entry["aabb"]):
+                diff["AABB"] = list(want)
+        if diff:
+            out.append((entry["name"], diff))
+    return out
+
+
+def save(context, coll, report=None):
+    """Write the hotspot edits back into the aircraft's vrconfig.
+
+    Only the directives that moved are rewritten, each in the author's own style
+    (indent, separator, decimal places), and only inside the blocks that moved -
+    comments, block order, a missing final newline and every untouched block come
+    out byte for byte as they went in.
+
+    Refuses to write when the file changed on disk since the import: someone else
+    (the aircraft's own updater, an editor) may have touched it, and silently
+    applying a stale scene over their work is the failure nobody forgives.
+    """
+    info = {"written": 0, "changed": [], "path": coll.get(PROP_SOURCE)}
+    path = info["path"]
+    if not path or not os.path.isfile(path):
+        if report is not None:
+            report({'ERROR'}, "vrconfig: the file is gone (%s)" % (path or "no path"))
+        return info
+
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    now = _digest(raw)
+    before = coll.get(PROP_HASH)
+    if before and now != before:
+        if report is not None:
+            report({'ERROR'},
+                   "%s changed on disk since it was imported - reload the aircraft "
+                   "before saving over it" % os.path.basename(path))
+        return info
+
+    diffs = changes(coll)
+    if not diffs:
+        if report is not None:
+            report({'INFO'}, "vrconfig: nothing changed, %s left alone"
+                   % os.path.basename(path))
+        return info
+
+    vr = vrconfig.parse_text(raw.decode("utf-8", "replace"), path)
+    by_name = {}
+    for hotspot in vr.hotspots:
+        by_name.setdefault(hotspot.name, hotspot)
+    edits = []
+    for name, diff in diffs:
+        hotspot = by_name.get(name)
+        if hotspot is None:
+            if report is not None:
+                report({'WARNING'}, "vrconfig: %r is no longer in the file" % name)
+            continue
+        lines = list(hotspot.lines)
+        for keyword, values in diff.items():
+            lines = vrconfig.rewrite_lines(lines, keyword, values)
+        edits.append((hotspot, lines))
+        info["changed"].append(name)
+    if not edits:
+        return info
+
+    text = vrconfig.splice(vr, edits)
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as fh:
+        fh.write(text.encode("utf-8"))
+    os.replace(tmp, path)
+    info["written"] = len(edits)
+
+    # the new file is the new baseline: a second save must not undo this one
+    coll[PROP_DUMP] = text
+    coll[PROP_HASH] = _digest(text.encode("utf-8"))
+    _refresh_stored(coll, path)
+    if report is not None:
+        report({'INFO'}, "vrconfig: wrote %d hotspot(s) to %s (%s)"
+               % (len(edits), os.path.basename(path), ", ".join(info["changed"])))
+    print("xplane_obj: vrconfig %s - wrote %s"
+          % (os.path.basename(path), ", ".join(info["changed"])), flush=True)
+    return info
+
+
+def _digest(data):
+    import hashlib
+    return hashlib.sha256(data).hexdigest()
+
+
+def _refresh_stored(coll, path):
+    """Re-read the file we just wrote into the collection's stored tables."""
+    vr = vrconfig.parse(path)
+    hotspots = json.loads(coll.get(PROP_HOTSPOTS) or "[]")
+    by_name = {}
+    for hotspot in vr.hotspots:
+        by_name.setdefault(hotspot.name, hotspot)
+    for entry in hotspots:
+        hotspot = by_name.get(entry.get("name"))
+        if hotspot is None:
+            continue
+        entry["xyz"] = list(hotspot.xyz or ())
+        entry["aabb"] = list(hotspot.aabb or ())
+        entry["angles"] = [hotspot.psi, hotspot.the, hotspot.phi]
+        entry["block"] = "\n".join(hotspot.lines)
+    coll[PROP_HOTSPOTS] = json.dumps(hotspots)

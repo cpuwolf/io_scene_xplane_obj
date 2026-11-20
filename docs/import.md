@@ -102,10 +102,19 @@ C90B_vrconfig.txt               plain collection, never exported
   objects carry, and the blocks that point at geometry the aircraft no longer has
   are reported (Laminar's CitationX ships three). Each resolved mesh is tagged
   with the VR overrides that apply to it (`vr_manips`).
-* **Read-only.** This imports the file; it does not save it. Moving a camera or a
-  box changes nothing on disk. The file's own text is kept on the collection
-  (`vrconfig_dump`) so a write-back can later replace only the blocks that
-  changed.
+* **Editable, and only what you moved is rewritten.** Move a camera, aim it, drag
+  a box edge, then **Save VR Config** in the N-panel: the directives that
+  changed are written back in the author's own style (their indent, their
+  separator, their decimal places), and every other line - comments, `####`
+  banners, block order, a file with no final newline, the untouched blocks - comes
+  out byte for byte as it went in. A 178-line file with one hotspot moved comes
+  back as a 2-line diff.
+* It **refuses to save** when the file changed on disk since the import
+  (an aircraft updater, another editor): reload the aircraft instead of writing a
+  stale scene over someone else's work.
+* Manipulator blocks (`BEGIN_MANIP`) are carried through untouched. Their
+  parameters are a text table with no 3D content - an editor is the right tool -
+  and the block is preserved verbatim, so editing the file by hand stays safe.
 * Everything it creates is **blue**: Blender's `COLOR_05` tag on the collection
   (the stripe in the outliner) and the same `#3887c7` as the object colour, so
   Solid > Color > Object shows the whole VR layer apart from the aircraft.

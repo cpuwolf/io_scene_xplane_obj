@@ -163,8 +163,9 @@ the first material's textures. Material clones are shared per state combination
    normals are kept either way; it is off by default.
 3. An aircraft's **`_vrconfig.txt` comes in with its `.acf`**: one collection
    beside the aircraft, a camera at each seat you can look through (Numpad 0) and
-   a wire box around each teleport hotspot. Read-only — it shows you what the file
-   says, it does not save it.
+   a wire box around each teleport hotspot. Move one and **Save VR Config** writes
+   just that line back, leaving the author's comments and every untouched block
+   exactly as they were.
 4. Edit, then **File > Export > X-Plane Object (.obj)**. Export is
    XPlane2Blender's own operator, bundled as a wheel: nothing here writes a `.obj`
    itself, so authoring manipulators, new animations, lights and LODs works exactly

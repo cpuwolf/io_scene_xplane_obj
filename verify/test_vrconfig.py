@@ -147,6 +147,54 @@ def main(argv):
 
     # --- the frame change ---------------------------------------------------
     check(VR.to_bl((1.0, 2.0, 3.0)) == (1.0, -3.0, 2.0), "xp -> blender axes")
+    check(VR.to_xp(VR.to_bl((1.0, 2.0, 3.0))) == (1.0, 2.0, 3.0), "and back")
+
+    # --- angles round trip --------------------------------------------------
+    for psi, the, phi in ((0.0, 0.0, 0.0), (90.0, 0.0, 0.0), (180.0, -10.0, 5.0),
+                          (359.0, 30.0, -20.0), (45.0, -45.0, 90.0),
+                          (3.0, 2.0, -1.0)):
+        f, u = VR.view_vectors(psi, the, phi)
+        back = VR.angles_from_vectors(f, u)
+        check(all(abs(a - b) < 1e-6 for a, b in
+                  zip(back, (psi if psi <= 180 else psi, the, phi))),
+              "angles round trip %r -> %r" % ((psi, the, phi), tuple(round(v, 4) for v in back)))
+
+    # --- the author's number shape -----------------------------------------
+    check(VR.format_like("-0.3658,", -0.5) == "-0.5000,", "four decimals and the comma")
+    check(VR.format_like("-3.0", 2.5) == "2.5", "one decimal stays one decimal")
+    check(VR.format_like("30", 30.0) == "30", "an integer stays an integer")
+    check(VR.format_like("30", 30.5) == "30.5", "and grows digits when it must")
+
+    # --- rewriting one directive leaves the rest alone ----------------------
+    block = [
+        "BEGIN_TELEPORT_HOTSPOT SITTING Pilot's Seat",
+        "   AABB -0.6843 0.2635 -0.9620 -0.0843 0.4635 -0.3620",
+        "   PRESET_XYZ -0.3843, 0.9135, -0.6620",
+        "   PRESET_PSI 0.0000",
+        "   PRESET_THE 0.0000",
+        "   PRESET_PHI 0.0000",
+        "END_TELEPORT_HOTSPOT",
+    ]
+    out = VR.rewrite_lines(block, "PRESET_XYZ", [-0.5, 0.9, -0.7])
+    check(len(out) == len(block), "rewriting keeps the block's line count")
+    check(out[2] == "   PRESET_XYZ -0.5000, 0.9000, -0.7000",
+          "only that line changed, with its commas and decimals: %r" % out[2])
+    check(all(a == b for i, (a, b) in enumerate(zip(block, out)) if i != 2),
+          "every other line is byte identical")
+    out = VR.rewrite_lines(block, "PRESET_THE", [12.5])
+    check(out[4] == "   PRESET_THE 12.5000", "a negative-zero line becomes the new value: %r" % out[4])
+
+    # a directive the block does not have yet goes in before the END line
+    short = ["BEGIN_TELEPORT_HOTSPOT SITTING X", "   PRESET_XYZ 0 0 0",
+             "END_TELEPORT_HOTSPOT"]
+    out = VR.rewrite_lines(short, "AABB", [-1, -1, -1, 1, 1, 1])
+    check(out[-2].strip().startswith("AABB")
+          and out[-1].strip().startswith("END_"),
+          "a missing directive is inserted before END: %r" % out)
+
+    # --- the whole-file write: nothing changed means nothing written --------
+    check(VR.splice(vr, [(vr.hotspots[0], vr.hotspots[0].lines)]) == vr.text(),
+          "an unedited block leaves the file byte identical")
 
     # --- the real corpus, when there is one --------------------------------
     corpus = argv[0] if argv else _corpus()
@@ -154,7 +202,7 @@ def main(argv):
         files = sorted(glob.glob(os.path.join(corpus, "**", "*" + VR.SUFFIX),
                                  recursive=True))
         print("\ncorpus: %d file(s) under %s" % (len(files), corpus))
-        total_h = total_m = total_missing = 0
+        total_h = total_m = total_missing = total_edited = 0
         for path in files:
             text = open(path, "rb").read().decode("utf-8", "replace")
             one = VR.parse(path)
@@ -164,7 +212,27 @@ def main(argv):
             total_m += len(one.manips)
             if not one.hotspots and not one.manips:
                 check(False, "%s: parsed nothing" % os.path.basename(path))
-        print("  hotspots=%d manipulators=%d" % (total_h, total_m))
+            # move one hotspot and check that only its own line changed: this is
+            # the promise the writer makes to an author who hand-edits the file
+            if one.hotspots:
+                hotspot = one.hotspots[0]
+                moved = VR.rewrite_lines(hotspot.lines, "PRESET_XYZ",
+                                         [0.125, 0.5, -0.75])
+                changed_text = VR.splice(one, [(hotspot, moved)])
+                before = text.replace("\r\n", "\n").split("\n")
+                after = changed_text.replace("\r\n", "\n").split("\n")
+                diff = [i for i, (a, b) in enumerate(zip(before, after)) if a != b]
+                total_edited += 1
+                check(len(before) == len(after) and len(diff) == 1,
+                      "%s: moving a hotspot rewrites %d line(s), not the file "
+                      "(%d line(s) differ)" % (os.path.basename(path), len(diff),
+                                               len(diff)))
+                back = VR.parse_text(changed_text)
+                check(close(back.hotspots[0].xyz, (0.125, 0.5, -0.75)),
+                      "%s: the written position reads back"
+                      % os.path.basename(path))
+        print("  hotspots=%d manipulators=%d edited=%d"
+              % (total_h, total_m, total_edited))
         if total_missing:
             print("  %d manipulator(s) with no geometry" % total_missing)
     else:

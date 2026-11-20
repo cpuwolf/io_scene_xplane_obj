@@ -94,7 +94,9 @@ check(len(cams) == len(vr.hotspots), "one camera per hotspot (%d)" % len(cams))
 check(len(boxes) == sum(1 for h in vr.hotspots if h.aabb),
       "one box per AABB (%d)" % len(boxes))
 check(bool(coll.get(VR.PROP_DUMP)), "the file's own text is stored on the collection")
-check(bool(coll.get(VR.PROP_READONLY)), "the collection says it is read-only")
+check(bool(coll.get(VR.PROP_HASH)), "and its hash, so a stale save can be refused")
+check(coll.get(VR.PROP_SOURCE, "").endswith(".txt"),
+      "the collection knows which file it came from (%s)" % coll.get(VR.PROP_SOURCE))
 check(coll.color_tag == VR.BLUE_TAG,
       "the collection carries the blue outliner tag (%s)" % coll.color_tag)
 check(all(all(abs(a - b) < 1e-6 for a, b in zip(tuple(ob.color), VR.BLUE))
@@ -125,9 +127,10 @@ for hotspot in vr.hotspots:
         if check(box is not None, "  %r has its AABB box" % hotspot.name):
             want_c = VC.to_bl(VR._with_origin(hotspot.centre, origin))
             got_c = tuple(box.matrix_world.translation)
-            size = tuple(box.dimensions)
+            size = tuple(box.dimensions)              # Blender (x, y, z)
+            want_size = (size[0], size[2], size[1])   # -> X-Plane (x, y, z)
             worst = max(worst, max(abs(a - b) for a, b in zip(want_c, got_c)))
-            check(all(abs(a - b) < 1e-3 for a, b in zip(size, hotspot.size)),
+            check(all(abs(a - b) < 1e-3 for a, b in zip(want_size, hotspot.size)),
                   "  %r box is %r (wanted %r)"
                   % (hotspot.name, tuple(round(v, 3) for v in size),
                      tuple(round(v, 3) for v in hotspot.size)))
