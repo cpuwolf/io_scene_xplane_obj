@@ -79,7 +79,7 @@ from . import objcodec as OC
 from . import xpanim as XA
 from . import xpmesh as XM
 from . import xpvr as XVR
-from . import acfbodies as XB
+from . import acfaero as XB
 
 CLASSES = []
 
@@ -530,13 +530,13 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
                     "normals stay as authored (they are per-corner in Blender)",
         default=False)
 
-    import_bodies: BoolProperty(
-        name="Aero bodies",
-        description="Also import the fuselage / nacelle shapes the flight model "
-                    "measures (Plane Maker's Bodies screen, `_body/*` in the "
-                    ".acf), into a 'Bodies' collection. They are the "
-                    "aerodynamic geometry, not an attached object: nothing here "
-                    "is exported",
+    import_aero: BoolProperty(
+        name="Aero geometry (bodies + wings)",
+        description="Also import the fuselage / nacelle / wing shapes the flight "
+                    "model measures (Plane Maker's Bodies and Wings screens, "
+                    "`_body/*` and `_wing/*` in the .acf), into an 'Aero' "
+                    "collection. They are the aerodynamic airframe, not "
+                    "attached objects: nothing here is exported",
         default=True)
 
     def invoke(self, context, event):
@@ -849,12 +849,14 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
         left = len(self._queue)
         self._queue = []
 
-        # The flight model's own geometry: Plane Maker's Bodies screen, i.e. the
-        # fuselage / nacelles / fairings the sim measures areas and drag on.
-        # Built after any placement, and never moved by it (see
-        # `_collection_roots`): these coordinates are the aircraft frame itself.
+        # The flight model's own geometry: Plane Maker's Bodies and Wings, i.e.
+        # the fuselage / nacelles / fairings / wing panels the sim measures areas,
+        # planform and drag on.  Built after any placement, and never moved by it
+        # (see `_collection_roots`): these coordinates are the aircraft frame
+        # itself.
         self._bodies = 0
-        if getattr(self, "import_bodies", True):
+        self._wings = 0
+        if getattr(self, "import_aero", True):
             for group, aircraft in parents:
                 acf_path = getattr(self, "_acf_files", {}).get(group)
                 if not acf_path:
@@ -862,17 +864,19 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
                 try:
                     info = XB.build(context, aircraft, acf_path)
                 except Exception as exc:                  # noqa: BLE001
-                    self.report({'WARNING'}, "bodies: %s" % exc)
+                    self.report({'WARNING'}, "aero geometry: %s" % exc)
                     continue
                 if not info:
                     self.report({'WARNING'},
-                                "%s: no aero bodies in the file (Plane Maker's "
-                                "Bodies screen defines them)" % group)
+                                "%s: no aero bodies or wings in the file (Plane "
+                                "Maker's Bodies and Wings screens define them)"
+                                % group)
                     continue
                 self._bodies += info["bodies"]
-                print("xplane_obj: %s: %d aero body(ies), %d faces"
-                      % (aircraft.name, info["bodies"], info["faces"]),
-                      flush=True)
+                self._wings += info["wings"]
+                print("xplane_obj: %s: %d aero body(ies), %d wing(s), %d faces"
+                      % (aircraft.name, info["bodies"], info["wings"],
+                         info["faces"]), flush=True)
 
         # the VR configuration is aircraft-scoped (file name = the .acf's prefix,
         # hotspots in aircraft coordinates) and its manipulators can only be
@@ -943,13 +947,17 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
                        "; %d wreckage file(s) left out of the view layer "
                        "(re-enable 'Wreckage' to export them)" % wrecked
                        if wrecked else "",
-                       ", %d aero body(ies) in 'Bodies'" % self._bodies
-                       if getattr(self, "_bodies", 0) else ""))
+                       ", %d aero body(ies) and %d wing(s) in 'Aero'"
+                       % (self._bodies, self._wings)
+                       if getattr(self, "_bodies", 0) or getattr(self, "_wings", 0)
+                       else ""))
         _enable_viewport_backface_culling()
         _trace("finished: %d/%d object(s), %d exportable collection(s), "
-               "%d wreckage excluded, %d aero body(ies), %d lost to a rollback"
+               "%d wreckage excluded, %d aero body(ies), %d wing(s), "
+               "%d lost to a rollback"
                % (self._made, self._total, self._colls, wrecked,
-                  getattr(self, "_bodies", 0), getattr(self, "_lost", 0)))
+                  getattr(self, "_bodies", 0), getattr(self, "_wings", 0),
+                  getattr(self, "_lost", 0)))
         return {'FINISHED'}
 
 

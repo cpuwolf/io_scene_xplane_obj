@@ -80,17 +80,19 @@ _obja/0/_v10_att_file_stl ../Cessna_172SP_cockpit.obj
   import's summary message says how many). Which objects are wreckage is read
   from the `.acf` and nothing else — no `.obj` carries the mark, and their file
   names are no guide (`broken_*`, `wreck_*`, and F-4's `F4_wrek/`).
-* **The flight model's own geometry comes in too — Plane Maker's Bodies.** Every
-  body is a point grid in the `.acf` (`_body/<n>/_geo_xyz/<i>,<j>,<k>`, feet),
-  and the sim measures that grid: frontal area is the largest section, side/top
-  the projected quads, wetted area the surface itself. It lands in a `Bodies`
-  collection (purple), one mesh per body, drawn as a wireframe in Solid view and
-  translucent when rendered, so the imported model shows through it. These are
+* **The flight model's own geometry comes in too — Plane Maker's Bodies and
+  Wings.** Both are point grids in the `.acf` (`_body/<n>/_geo_xyz/<i>,<j>,<k>`
+  and `_wing/<n>/…`, feet), and the sim measures them: frontal area is the largest
+  body section, side/top the projected quads, wetted area the surface itself, and
+  a wing's planform the same projection. They land in an `Aero` collection
+  (purple), one mesh per body and per wing panel — `Body 1 Fuselage`,
+  `Wing 1 R`, `H-Stab 1 L`, `V-Stab 1` — drawn as a wireframe in Solid view and
+  translucent when rendered, so the imported model shows through. These are
   meshes, not exportable layers — XPlane2Blender never writes them — and
   *Place by .acf* leaves them alone, because their coordinates are already the
-  aircraft frame. Only the first `_s_dim` stations and `_r_dim` ring points of the
-  20 × 18 array are live; the rest is stale and must be ignored. See
-  [bodies](bodies.md) for the numbers that prove the grid is what the sim flies.
+  aircraft frame. Only the first `_s_dim` sections and `_r_dim` section points of
+  the 20 × 18 array are live; the rest is stale and must be ignored. See
+  [aero](aero.md) for the numbers that prove this is the geometry the sim flies.
 * The `.acf` is **only read**. Laminar asks that add-ons not write the format,
   because it changes between sim versions, and this importer has no reason to.
 * **It takes a while (13 to 113 objects), so it reports where it is**: the status

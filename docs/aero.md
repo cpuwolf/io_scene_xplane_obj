@@ -1,31 +1,39 @@
-# The aircraft's bodies: the geometry the flight model measures
+# The aero airframe: the bodies and wings the flight model measures
 
 X-Plane does not fly the OBJ8 you see — it flies the shapes on Plane Maker's
-**Bodies** screen. They live in the `.acf` as point grids, and they are what the
-`.acf` import brings in as a `Bodies` collection.
+**Bodies** and **Wings** screens. They live in the `.acf` as point grids, and they
+are what the `.acf` import brings in as an `Aero` collection.
 
 ## What is in the file
 
 ```
 P _body/<n>/_geo_xyz/<i>,<j>,<k>   one point, feet
+P _wing/<n>/_geo_xyz/<i>,<j>,<k>   one point, feet
 P _body/<n>/_r_dim                 points around one cross-section (max 18)
-P _body/<n>/_s_dim                 stations used (max 20)
+P _body/<n>/_s_dim                 sections used (max 20)
 P _body/<n>/_part_x/_y/_z          front tip of the body, feet
 P _body/<n>/_part_the/_psi/_phi    pitch / heading / roll, degrees
 P _body/<n>/_part_cd               coefficient of drag, on the frontal area
 P _body/<n>/_part_area_rule        area rule ratio (transonic/supersonic)
 P _body/<n>/_descrip               "Fuselage", "Spinner", "Left Wheel Fairing", …
+P _wing/<n>/_semilen_SEG / _Croot / _Ctip / _sweep_design / _dihed_design
+P _wing/<n>/_is_right_mult         -1 for the left-hand slot, +1 for the right
 ```
 
-- `<i>` is the station along the body, `<j>` the point around the section,
-  `<k>` = 0/1/2 is x / y / z. Airplane axes: **x right, y up, z aft**, in feet.
-  Add `_part_x/_y/_z` and the pitch/heading/roll to get the point in the aircraft
-  frame.
-- The array is always **20 × 18 slots**, but only the first `_s_dim` stations and
-  `_r_dim` ring points are live. **The rest is stale**: the Lancair Evolution
+- `<i>` walks along a body / across a span, `<j>` around the section, `<k>` =
+  0/1/2 is x / y / z. Airplane axes: **x right, y up, z aft**, in feet.
+- The array is always **20 × 18 slots**, but only the first `_s_dim` sections and
+  `_r_dim` section points are live. **The rest is stale**: the Lancair Evolution
   zeroes it, a Cessna 172 leaves three duplicated tail rings behind. Read the
   whole array and the Lancair's side area comes out 18.50 m² instead of the
   7.81 m² the sim prints.
+- A **body** is stored in its own frame: add `_part_x/_y/_z` plus the
+  pitch/heading/roll (a Cessna's spinner sits at z −4.94 ft, which is its grid's
+  −1.22 plus the part's −3.72).
+- A **wing** is stored **already in the aircraft frame**, with dihedral, sweep and
+  incidence baked in, and each side is its own slot: the Cessna's slot 0 spans
+  x −8.60..0 and slot 1 spans 0..8.60. Adding `_part_*` to a wing would double the
+  root offset and stretch the span to 39 ft instead of the real 36.
 - A body can be attached to an engine or a gear leg (`_engn_for_body`,
   `_gear_for_body`), which is how a spinner or a wheel fairing moves with it.
 
@@ -57,16 +65,25 @@ reshaping a fuselage changes both. The runtime side of it:
 `sim/aircraft/bodies/acf_fuse_cd`, `…/acf_fuse_cd_array` (one per body) and
 `sim/aircraft2/body/kill_body`.
 
+For a wing the same projection gives the planform, which is what the dump's
+"wing area" is: the Lancair's four right-hand panels project to **6.434 m²**
+against the **6.46 m²** it reports for the joined wing (the difference is the
+overlap the sim adds when it joins the sections), and its root chord comes out at
+5.75 ft against the 1.75 m (5.74 ft) it prints.
+
 ## What the import builds
 
-One mesh per body, `Body <n+1> <descrip>`, in a `Bodies` collection under the
-aircraft:
+One mesh per body and per wing panel, in an `Aero` collection under the aircraft:
 
+- `Body 1 Fuselage`, `Wing 1 R`, `Wing 2 L`, `H-Stab 1 R`, `V-Stab 1`, … — the
+  names are Plane Maker's (slots 0..7 are the four wing sections, left/right;
+  8/9 the horizontal stabiliser, 10/11 the two vertical ones);
 - metres, mapped to Blender `(x, -z, y)` — the same turn the OBJ8 importer makes,
   so it sits on top of the imported model;
-- `_part_*` position and pitch/heading/roll are baked into the points, so every
-  object has an identity transform (nothing for the exporter to do, nothing for
-  a later placement switch to undo);
+- a body's `_part_*` position and pitch/heading/roll are baked into its points; a
+  wing's grid is used as it stands. Either way every object has an identity
+  transform (nothing for the exporter to do, nothing for a later placement switch
+  to undo);
 - wireframe in Solid view, translucent when rendered (`show_in_front`), so the
   visible model shows through;
 - **not an exportable collection** — these are aerodynamic geometry, not an `.obj`
@@ -74,6 +91,7 @@ aircraft:
 - skipped by *Place by .acf*: the `.acf`'s attachment offset belongs to attached
   objects, and these coordinates are already the aircraft frame.
 
-`acf_bodies.py` in `verify/` checks all of the above, including the wetted-area
-match against `Cycle Dump.txt` and the pitch/heading offsets on a Baron (2° nose
-up) and an Aerolite (90° heading).
+`acf_aero.py` in `verify/` checks all of the above, including the wetted-area
+match against `Cycle Dump.txt`, the planform total, the pitch/heading offsets on a
+Baron (2° nose up) and an Aerolite (90° heading), and that a vertical stabiliser
+comes out vertical.
