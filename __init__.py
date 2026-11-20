@@ -92,6 +92,17 @@ def _add(cls):
 # import
 # ---------------------------------------------------------------------------
 
+#: The outliner colour tag the `.acf` import puts on a cockpit object's
+#: collection.  Which object that is comes from the file itself
+#: (`_obja/<slot>/_obj_flags` bit 11 = interior view, bit 12 = exterior view),
+#: not from its name: five of Laminar's own cockpit objects are called things
+#: like `Cockpit_screens.obj` or `COCKPIT_PANEL.obj`, and a name is no guide.
+#: X-Plane honours manipulators in these objects only, so this is where a
+#: clickspot has to go.  COLOR_04 is the theme's green, and a colour tag is a
+#: display-only property - it cannot reach the exported file.
+COCKPIT_TAG = 'COLOR_04'
+
+
 def _import_objects(context, paths, report, coll=None, weld_vertices=False):
     """Import every path into the scene; (files imported, triangles, headers).
 
@@ -517,12 +528,16 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
         seen = set()
         missing = []
         self._acf_files = {}
+        # normcased paths of the objects these .acf files attach as a cockpit
+        # object: what gets the colour tag once its collection exists
+        self._cockpit = set()
         for acf in acfs:
             try:
                 found, gone = AF.objects(acf)
             except (OSError, ValueError) as exc:
                 self.report({'ERROR'}, "%s: %s" % (os.path.basename(acf), exc))
                 continue
+            self._cockpit |= AF.cockpit_objects(acf)
             group = os.path.basename(acf)
             # the aircraft collection is keyed by this basename, but the offset
             # lives in the file itself - keep the path to read it later
@@ -689,6 +704,7 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
                         part.get(XM.PROP_ROLE) == XM.ROLE_TRIS:
                     self._tris += len(part.data.loop_triangles) or (
                         len(part.data.polygons))
+            colls = []
             if self._can_convert:
                 # per object, not one call at the end: the conversion is
                 # part of this step, so the progress count is honest
@@ -696,6 +712,12 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
                 for coll in colls:
                     _adopt(parent, coll)
                 self._colls += len(colls)
+            if os.path.normcase(path) in self._cockpit:
+                # the conversion renames this collection to the file name and
+                # only builds a new one when it cannot, so both are tagged:
+                # either way the object ends up in exactly one of them
+                for coll in colls or [sub]:
+                    coll.color_tag = COCKPIT_TAG
         context.window_manager.progress_update(self._done)
 
     def _finish(self, context, stopped=False):

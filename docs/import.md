@@ -58,6 +58,17 @@ _obja/0/_v10_att_file_stl ../Cessna_172SP_cockpit.obj
   object two of them share stays with the first, so nothing is imported twice).
 * A listed object that is **not on disk** is reported as a warning and skipped —
   it does not stop the import.
+* **The aircraft's cockpit object gets a green colour tag.** X-Plane only honours
+  manipulators (clickspots) inside the cockpit objects, and the `.acf` says which
+  ones they are: `_obja/<slot>/_obj_flags` bit 11 is the object drawn in the
+  interior view, bit 12 the exterior one. Those bits are read, nothing is guessed
+  from file names — five of Laminar's own are called `Cockpit_screens.obj`,
+  `COCKPIT_PANEL.obj`, `cockpit_panel_interactive.obj` and the like. One aircraft
+  may have two (b738, A330: `*_cockpit.obj` + `*_cockpit_OUT.obj`) or attach one
+  file twice (F-4, C90B EVO); either way every tagged collection is a place a
+  clickspot can live, and an untagged one cannot. The tag is a display-only
+  outliner colour (`COLOR_04`) — it changes nothing about the export, the layer
+  name still carries the file name.
 * The `.acf` is **only read**. Laminar asks that add-ons not write the format,
   because it changes between sim versions, and this importer has no reason to.
 * **It takes a while (13 to 113 objects), so it reports where it is**: the status

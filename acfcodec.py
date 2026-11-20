@@ -36,6 +36,16 @@ OBJ_FIELD = "_v10_att_file_stl"
 # attached objects; `_wpna` is the same trick for weapons (.wpn) and is not ours
 OBJ_SECTION = "_obja"
 
+#: Plane-Maker's per-object checkbox bits.  Only two of them are read here, and
+#: both mean "this is the aircraft's cockpit object": 2048 is the one drawn in the
+#: interior view (Plane-Maker calls the pair INN / OUT), 4096 the exterior one.
+#: Verified against all 26 Laminar .acf files on hand: the bits are set on exactly
+#: the 29 objects that carry `ATTR_manip_*` lines, and on no other object - which
+#: matches Laminar's own rule ("manipulations can only be used on cockpit
+#: objects"), so this is the file's own answer to "where do clickspots work".
+FLAGS_FIELD = "_obj_flags"
+COCKPIT_BITS = (1 << 11) | (1 << 12)
+
 OBJ_EXT = ".obj"
 
 # the two folders X-Plane resolves an attached object against, in its order
@@ -91,6 +101,25 @@ def slots(text):
     return found
 
 
+def _candidate(acf_path, raw):
+    """Where a resolved path would be if only the aircraft folder were searched."""
+    return os.path.normpath(os.path.join(
+        os.path.dirname(os.path.abspath(acf_path)), raw.replace("\\", "/")))
+
+
+def _find(acf_path, raw):
+    """The file `raw` points at, or None: aircraft folder first, then objects/."""
+    name = raw.replace("\\", "/")
+    if not name.lower().endswith(OBJ_EXT):
+        return None
+    aircraft = os.path.dirname(os.path.abspath(acf_path))
+    for base in (aircraft, os.path.join(aircraft, OBJECT_SUBDIR)):
+        hit = os.path.normpath(os.path.join(base, name))
+        if os.path.isfile(hit):
+            return hit
+    return None
+
+
 def resolve(acf_path, text):
     """(existing .obj paths, raw names not found), deduplicated, slot order.
 
@@ -98,8 +127,6 @@ def resolve(acf_path, text):
     slot 0 *and* slot 1); importing it twice would build two identical
     collections, so the second occurrence is dropped, keeping the lowest slot.
     """
-    aircraft = os.path.dirname(os.path.abspath(acf_path))
-    bases = [aircraft, os.path.join(aircraft, OBJECT_SUBDIR)]
     seen = set()
     reported = set()
     paths = []
@@ -108,11 +135,9 @@ def resolve(acf_path, text):
         name = raw.replace("\\", "/")
         if not name.lower().endswith(OBJ_EXT):
             continue
-        candidates = [os.path.normpath(os.path.join(base, name))
-                      for base in bases]
-        hit = next((c for c in candidates if os.path.isfile(c)), None)
+        hit = _find(acf_path, raw)
         if hit is None:
-            key = os.path.normcase(candidates[0])
+            key = os.path.normcase(_candidate(acf_path, raw))
             if key not in reported:
                 reported.add(key)
                 missing.append(raw)
@@ -128,6 +153,58 @@ def resolve(acf_path, text):
 def objects(acf_path):
     """(existing .obj paths, raw names missing on disk) for one .acf."""
     return resolve(acf_path, read_text(acf_path))
+
+
+def flags(text):
+    """{slot: int} from every `P _obja/<slot>/_obj_flags <value>` line."""
+    found = {}
+    for line in text.splitlines():
+        words = line.split(None, 2)
+        if len(words) < 3:
+            continue
+        parts = words[1].split("/")
+        if len(parts) != 3 or parts[0] != OBJ_SECTION or parts[2] != FLAGS_FIELD:
+            continue
+        if not parts[1].isdigit():
+            continue
+        try:
+            found[int(parts[1])] = int(words[2])
+        except ValueError:
+            pass
+    return found
+
+
+def is_cockpit(bits):
+    """Is this `_obj_flags` value one of the aircraft's cockpit objects?"""
+    return bool(bits & COCKPIT_BITS)
+
+
+def cockpit_objects(acf_path):
+    """The resolved paths this .acf attaches as a cockpit object (INN and/or OUT).
+
+    These are the only objects X-Plane honours manipulators in, so the import
+    marks their collections - everything else in the aircraft can declare an
+    `ATTR_manip_*` and never react to a click in the sim.
+
+    One path can be both: an aircraft that draws a single cockpit file in both
+    views sets both bits on that one slot, and some attach the same file twice
+    (once as INN, once as OUT) - the set holds it once either way.
+    """
+    try:
+        text = read_text(acf_path)
+    except (OSError, ValueError):
+        return set()
+    wanted = {slot for slot, bits in flags(text).items() if is_cockpit(bits)}
+    if not wanted:
+        return set()
+    found = set()
+    for slot, raw in slots(text):
+        if slot not in wanted:
+            continue
+        hit = _find(acf_path, raw)
+        if hit is not None:
+            found.add(os.path.normcase(hit))
+    return found
 
 
 #: the CG, in feet, in the same authoring-point frame the `_obja` offsets use.
