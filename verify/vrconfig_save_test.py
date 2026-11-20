@@ -155,6 +155,99 @@ info = XVR.save(bpy.context, coll)
 check(info["written"] == 0, "a second save finds nothing to do (%d)" % info["written"])
 check(open(copy, "rb").read() == after, "and leaves the file alone")
 
+# --- 3b. a manipulator parameter, through the same pending-edit table ------
+before_manip = open(copy, "rb").read()
+manips = json.loads(coll.get(XVR.PROP_MANIPS))
+target = None
+for row, entry in enumerate(manips):
+    if (entry.get("params") or {}).get("DEG_PER_ACTION"):
+        target = (row, entry)
+        break
+if check(target is not None, "a manipulator block with DEG_PER_ACTION was imported"):
+    row, entry = target
+    old = entry["params"]["DEG_PER_ACTION"][0]
+    new = 15.0 if abs(old - 15.0) > 1e-6 else 7.0
+    # through the panel's own rows: that is the path a user takes
+    holders = [item for ob in bpy.data.objects for item in ob.xp8_vr_manips
+               if item.collection == coll.name and item.row == row]
+    if check(bool(holders), "the block has a row on the mesh that carries it"):
+        holders[0].has_deg = True
+        holders[0].deg = new
+        holders[0].hold = True
+    info = XVR.save(bpy.context, coll)
+    check(info["written"] == 1, "the block was written (%d)" % info["written"])
+    after_manip = open(copy, "rb").read()
+    lines_before = before_manip.decode("utf-8", "replace").split("\n")
+    lines_after = after_manip.decode("utf-8", "replace").split("\n")
+    import difflib
+    diff = list(difflib.unified_diff(lines_before, lines_after, "before", "after",
+                                     n=2, lineterm=""))
+    print("   manip diff:\n%s" % "\n".join("      " + d for d in diff[:40]), flush=True)
+    changed = len([d for d in diff if d[:1] in "+-" and not d.startswith(("+++", "---"))])
+    check(changed == 3, "one line rewritten and one added (%d changed lines)" % changed)
+    check(len(lines_after) == len(lines_before) + 1,
+          "HOLD_MANIP added a line (%d -> %d)" % (len(lines_before), len(lines_after)))
+    check(any(line.strip() == "DEG_PER_ACTION %g" % new
+              or line.strip().startswith("DEG_PER_ACTION %g" % new)
+              for line in lines_after),
+          "the new DEG_PER_ACTION is in the file")
+    check(any(line.strip() == "HOLD_MANIP" for line in lines_after),
+          "and so is the flag")
+    fresh = VC.parse(copy)
+    block = next((m for m in fresh.manips
+                  if m.type == entry["type"] and m.a == entry["a"]), None)
+    check(block is not None and block.values("DEG_PER_ACTION") == [new]
+          and block.has("HOLD_MANIP"),
+          "and it reads back as %r + HOLD_MANIP" % (new,))
+    # and the pending table is empty again
+    check(XVR.manip_edits(coll) == {}, "the pending edits were cleared")
+    info = XVR.save(bpy.context, coll)
+    check(info["written"] == 0, "saving again writes nothing (%d)" % info["written"])
+
+    # --- 3c. an ACTION line that is not one is refused, not written --------
+    before_bad = open(copy, "rb").read()
+    reports = []
+    holders = [item for ob in bpy.data.objects for item in ob.xp8_vr_manips
+               if item.collection == coll.name and item.row == row]
+    holders[0].action = "this is not a directive"
+    holders[0].has_deg = True
+    holders[0].deg = new + 1
+    info = XVR.save(bpy.context, coll, lambda level, text: reports.append(
+        (tuple(level), text)))
+    check(info["written"] == 1, "the rest of the edit still went in (%d)"
+          % info["written"])
+    check(any("is not an ACTION line" in text for _level, text in reports),
+          "a warning says why the ACTION was left alone: %r"
+          % ([t for _l, t in reports],))
+    after_bad = open(copy, "rb").read().decode("utf-8", "replace")
+    check("this is not a directive" not in after_bad,
+          "the bad ACTION text is not in the file")
+    check(after_bad.count("\n") == before_bad.decode("utf-8", "replace").count("\n"),
+          "and it did not add a line either (%d -> %d)"
+          % (before_bad.count(b"\n"), after_bad.count("\n")))
+
+    # --- 3d. unticking a box takes the directive out of the file ----------
+    holders = [item for ob in bpy.data.objects for item in ob.xp8_vr_manips
+               if item.collection == coll.name and item.row == row]
+    if check(bool(holders), "the row is still there to untick"):
+        holders[0].has_deg = False
+        holders[0].hold = False
+        pending = XVR.manip_edits(coll)
+        check(pending.get(str(row), {}).get("DEG_PER_ACTION", "missing") is None,
+              "unticking records a removal, not a no-op: %r" % (pending,))
+        info = XVR.save(bpy.context, coll)
+        check(info["written"] == 1, "and the block is written (%d)" % info["written"])
+        back = VC.parse(copy)
+        same = next((m for m in back.manips if m.type == entry["type"]
+                     and m.a == entry["a"]), None)
+        check(same is not None, "the block is still in the file")
+        if same is not None:
+            check(not same.values("DEG_PER_ACTION"),
+                  "its DEG_PER_ACTION is gone: %r" % (same.values("DEG_PER_ACTION"),))
+            check(not same.has("HOLD_MANIP"), "and so is its HOLD_MANIP")
+        check(len(back.manips) >= 1, "the file still parses (%d block(s))"
+              % len(back.manips))
+
 # --- 4. a file that moved on disk is not overwritten ----------------------
 with open(copy, "ab") as fh:
     fh.write(b"\n# someone else edited this file\n")

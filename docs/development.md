@@ -37,6 +37,20 @@ blender -b --factory-startup --python verify/weld_test.py [-- <file.obj>]       
 blender -b --factory-startup --python verify/vrconfig_blend_test.py -- <file.acf>  # vrconfig hotspots land in the cockpit (ray cast)
 blender -b --factory-startup --python verify/vrconfig_save_test.py -- <file.acf>   # moving a hotspot rewrites one line, on a copy of the file
 blender -b --factory-startup --python verify/vr_manip_leak_test.py -- <file.obj>   # the vr_manips tag does not reach the exported .obj
+blender -b --factory-startup --python verify/vrconfig_panel_test.py -- <file.acf>  # the per-object VR panel: rows, callbacks, draw() by hand
+blender -b --factory-startup --python verify/acf_stale_test.py -- <file.acf>       # a collection freed under the import (undo) is survivable
+blender -b --factory-startup --python verify/acf_undo_test.py -- <file.acf>        # ...driven for real: undo two objects in, finish cleanly
+
+`verify/gui_vr_panel_shot.py` is its UI counterpart: it imports, selects a mesh
+that carries a manipulator and screenshots Properties > Object, which is the only
+way to see where a panel actually lands.  `verify/gui_weld_probe.py` is the manual counterpart: it needs a **window** (no
+`-b`), because the modal path, the depsgraph and the HUD only exist there:
+
+    XP8_WAIT=120 blender --factory-startup --python verify/gui_weld_probe.py -- <file.acf>
+
+It imports with welding, samples the scene every second, saves the result and
+quits; the log goes to `$XP8_GUI_LOG`.  Use it to check a "it crashed in Blender"
+report against a clean session before hunting for a bug in the add-on.
 blender -b --python verify/installed_probe.py                                     # no --factory-startup: is the installed copy this tree?
 ```
 

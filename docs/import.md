@@ -112,15 +112,55 @@ C90B_vrconfig.txt               plain collection, never exported
 * It **refuses to save** when the file changed on disk since the import
   (an aircraft updater, another editor): reload the aircraft instead of writing a
   stale scene over someone else's work.
-* Manipulator blocks (`BEGIN_MANIP`) are carried through untouched. Their
-  parameters are a text table with no 3D content - an editor is the right tool -
-  and the block is preserved verbatim, so editing the file by hand stays safe.
+* **The manipulator parameters are editable too, on the object that carries
+  them**: Properties > **Object** > **VR manipulators**, right under
+  XPlane2Blender's own X-Plane panel.  A `BEGIN_MANIP` block is keyed by an
+  `ATTR_manip_*` line *inside a mesh*, so it is listed on that mesh: the block's
+  type and command/dataref, the file it came from, `DEG_PER_ACTION`,
+  `SWITCH_THRESHOLD` (tilt in degrees, then motion in metres), the `HOLD_MANIP` /
+  `INVERT_MANIP` / `WRAP_MANIP` / `DISABLE_VISUALS` flags and the raw `ACTION`
+  line.  Ticking a flag adds its line, unticking removes it, and the numbers are
+  rewritten in the author's own decimal places - so moving one parameter is a
+  one-line diff.  **Unticking a box takes that directive out of the file** - it
+  is not "forget my edit" - and clearing the `ACTION` field removes that line,
+  which is a legal thing to do (the block's own type is then the whole story).
+  **Save VR Config** (here, or in the 3D view's VR panel) writes it all,
+  together with any hotspot you moved.
+* Importing the same aircraft again **replaces its VR collection** instead of
+  stacking a second one: hotspot cameras do not double, and the manipulator rows
+  are rebuilt from the new import.  Edits you had not saved are discarded (the
+  console says how many).
+* Importing the same aircraft again **replaces its VR collection** instead of
+  stacking a second one: hotspot cameras do not double, and the manipulator rows
+  are rebuilt from the new import.  Edits you had not saved are discarded (the
+  console says how many).
+* Note that this is **not one block per mesh**: the file customises a subset of
+  the manipulators (261 of 322 distinct `ATTR_manip_*` lines in a C90B are not
+  mentioned at all), a block can cover several batches (a yoke split into three),
+  and a file can carry the same key twice. The list is keyed on the block, and
+  each row names the meshes it resolved to.
 * Everything it creates is **blue**: Blender's `COLOR_05` tag on the collection
   (the stripe in the outliner) and the same `#3887c7` as the object colour, so
   Solid > Color > Object shows the whole VR layer apart from the aircraft.
 * Hotspots are in the aircraft frame, so they line up with the cockpit once
   *Place by .acf* is on. Without it each `.obj` sits at its own file origin and
   the import says so.
+
+## What a long `.acf` import does to the scene
+
+The `.acf` import runs one object per UI tick so the status bar can show progress
+and `ESC` can stop it.  That means it builds the scene **over time**, and
+anything that rolls the scene back while it runs (an undo applied mid-import)
+takes the objects it has already imported with it.  The import survives that - it
+carries on into a fresh aircraft collection and says how many collections were
+lost - but the aircraft will be short, so run the import again.  Nothing holds a
+Blender datablock across a tick for this reason.
+
+Every run leaves one line in
+`~/Library/Application Support/Blender/<version>/config/xp8_import.log`
+(`%APPDATA%\Blender Foundation\Blender\<version>\config` on Windows), and a
+failed step or a lost collection is written there in full.  That file plus
+Blender's `crash.txt` is what to attach to a bug report.
 
 ## Geometry
 

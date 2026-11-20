@@ -165,7 +165,10 @@ the first material's textures. Material clones are shared per state combination
    beside the aircraft, a camera at each seat you can look through (Numpad 0) and
    a wire box around each teleport hotspot. Move one and **Save VR Config** writes
    just that line back, leaving the author's comments and every untouched block
-   exactly as they were.
+   exactly as they were. The VR numbers behind a knob (`DEG_PER_ACTION`,
+   `SWITCH_THRESHOLD`) and its flags are edited on the object that carries the
+   manipulator - Properties > Object > **VR manipulators** - and written back the
+   same way.
 4. Edit, then **File > Export > X-Plane Object (.obj)**. Export is
    XPlane2Blender's own operator, bundled as a wheel: nothing here writes a `.obj`
    itself, so authoring manipulators, new animations, lights and LODs works exactly

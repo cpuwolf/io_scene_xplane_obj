@@ -65,10 +65,12 @@ import os
 import glob
 import json
 import sys
+import time
+import traceback
 
 import bpy
 from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
-                       FloatProperty, StringProperty)
+                       FloatProperty, IntProperty, StringProperty)
 from bpy_extras.io_utils import (ExportHelper, ImportHelper,
                                  poll_file_object_drop)
 
@@ -206,6 +208,47 @@ def _collection_roots(coll):
     return [ob for ob in members if ob.parent not in members]
 
 
+def _trace(message):
+    """Append a line to `xp8_import.log` in the user config directory.
+
+    A GUI Blender keeps no console, so what an import `print()`ed is gone by the
+    time anyone looks - and Blender's own crash report lists only the operators
+    it ran, not what the add-on saw.  This is the other half of that story:
+    anomalies, failed steps and the end of each run, in
+    `~/Library/Application Support/Blender/<ver>/config/xp8_import.log` (or the
+    platform's equivalent).  Nothing about the scene's contents is recorded.
+    """
+    try:
+        directory = bpy.utils.user_resource('CONFIG', path="", create=True) \
+            or bpy.app.tempdir
+        path = os.path.join(directory, "xp8_import.log")
+        if os.path.exists(path) and os.path.getsize(path) > 512 * 1024:
+            os.replace(path, path + ".1")
+        with open(path, "a") as handle:
+            handle.write("%s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"),
+                                      message))
+    except Exception:                                    # noqa: BLE001
+        pass
+
+
+def _alive(coll):
+    """Is this collection still there?
+
+    A modal operator hands out datablocks over several timer ticks, and an undo
+    (Ctrl+Z, `bpy.ops.object.editmode_toggle()`…) stops during that window and
+    frees everything the import had built so far.  The cached reference then goes
+    stale, and touching it raises `ReferenceError: StructRNA of type Collection
+    has been removed`.  Everything that holds a collection across ticks has to ask
+    first.  Reading `coll.name` is what raises, so even that is inside the try.
+    """
+    if coll is None:
+        return False
+    try:
+        return bpy.data.collections.get(coll.name) is coll
+    except ReferenceError:
+        return False
+
+
 def _aircraft_collections():
     """Every collection that an .acf import tagged as an aircraft."""
     from . import acfplace
@@ -231,6 +274,8 @@ def _remember_aircraft(coll, acf_path):
 def _apply_placements(coll):
     """Move the whole aircraft to the position X-Plane draws it at."""
     from . import acfplace
+    if not _alive(coll):
+        return 0
     values = coll.get(acfplace.PROP)
     if not values or coll.get(acfplace.PROP_ON):
         return 0
@@ -247,6 +292,8 @@ def _apply_placements(coll):
 def _clear_placements(coll):
     """Put that aircraft back at its OBJ origins (the exportable state)."""
     from . import acfplace
+    if not _alive(coll):
+        return 0
     if not coll.get(acfplace.PROP_ON):
         return 0
     values = coll.get(acfplace.PROP) or [0.0] * 6
@@ -514,8 +561,12 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
         self._done = 0
         self._made = 0
         self._tris = 0
-        self._colls = []
-        self._parents = {}           # .acf name -> its parent collection
+        self._colls = 0              # exportable collections built so far
+        self._lost = 0               # aircraft collections a rollback took away
+        # .acf name -> the *name* of its parent collection, never the datablock:
+        # an import runs over many timer ticks, and a reference held across a
+        # tick can be freed under it (undo, a rollback) - a name cannot
+        self._parents = {}
         self._timer = None
         self._can_convert = XC.available()
 
@@ -554,6 +605,9 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
     def _tick(self, context):
         """`_step`, but a step that blows up must not kill the modal handler.
 
+        A step that raises is recorded in `xp8_import.log` as well: the report
+        goes to the status bar and is gone by the time anyone looks.
+
         The queue entry was already popped, so the run still advances and the
         timer is removed by `_finish` - a dangling timer would keep calling into
         a half-built scene.
@@ -561,6 +615,8 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
         try:
             self._step(context)
         except Exception as exc:                          # noqa: BLE001
+            _trace("step failed: %s: %s\n%s"
+                   % (type(exc).__name__, exc, traceback.format_exc()))
             self.report({'ERROR'}, "one object was skipped after an error: %s"
                         % exc)
 
@@ -579,11 +635,21 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
         siblings.  XPlane2Blender walks collections recursively, so a root
         inside it exports exactly as before.
         """
-        coll = self._parents.get(name)
+        # by name, every tick: holding the datablock would break the moment
+        # something rolled the scene back under a long import
+        coll = bpy.data.collections.get(self._parents.get(name) or "")
         if coll is None:
+            if self._parents.get(name):
+                self._lost += 1
+                _trace("%s: parent collection %r vanished mid-import; "
+                       "starting a fresh one (%d collection(s) in the file)"
+                       % (name, self._parents.get(name),
+                          len(bpy.data.collections)))
+                print("xplane_obj: %s: the collection went away mid-import, "
+                      "starting a fresh one" % name, flush=True)
             coll = bpy.data.collections.new(name)
             context.scene.collection.children.link(coll)
-            self._parents[name] = coll
+            self._parents[name] = coll.name
             _remember_aircraft(coll,
                                getattr(self, "_acf_files", {}).get(name, name))
         return coll
@@ -629,18 +695,59 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
                 colls = _convert(context, [header], self.report)
                 for coll in colls:
                     _adopt(parent, coll)
-                self._colls.extend(colls)
+                self._colls += len(colls)
         context.window_manager.progress_update(self._done)
 
     def _finish(self, context, stopped=False):
+        """Close the run out. An exception here must not escape.
+
+        This is called from the modal handler, and Blender frees a modal
+        operator from C after its callback returns.  A Python exception that
+        unwinds through that path corrupts the operator stack and the process
+        dies in `wm_operator_register` (the crash report shows a SIGSEGV there,
+        with the traceback as the last thing in the log) - so a failure is
+        reported as a failure instead, and the run ends with CANCELLED.
+        """
+        try:
+            return self._finish_run(context, stopped)
+        except Exception as exc:                          # noqa: BLE001
+            traceback.print_exc()
+            self.report({'ERROR'}, "the import could not be finished: %s: %s"
+                        % (type(exc).__name__, exc))
+            try:
+                context.window_manager.progress_end()
+            except Exception:                             # noqa: BLE001
+                pass
+            return {'CANCELLED'}
+
+    def _finish_run(self, context, stopped=False):
         window_manager = context.window_manager
         if self._timer is not None:
             window_manager.event_timer_remove(self._timer)
             self._timer = None
         window_manager.progress_end()
         self._status(context, None)
+
+        # resolve the names once, here - the only place that still needs the
+        # collections themselves, and by now nothing is running under them
+        parents = []
+        for group, name in self._parents.items():
+            coll = bpy.data.collections.get(name)
+            if coll is None:
+                continue
+            parents.append((group, coll))
+        lost = len(self._parents) - len(parents) + getattr(self, "_lost", 0)
+        if lost:
+            # an undo/rollback during the import takes the earlier objects with
+            # it; the import carries on into what is left, and this is the note
+            # that says why the aircraft looks short
+            self.report({'WARNING'},
+                        "%d aircraft collection(s) disappeared during the "
+                        "import (an undo?) - import again to get them back"
+                        % lost)
+
         if getattr(self, "place_by_acf", False):
-            for coll in self._parents.values():
+            for _group, coll in parents:
                 moved = _apply_placements(coll)
                 if moved:
                     print("xplane_obj: placed %s (%d objects) by its .acf"
@@ -653,7 +760,7 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
         # resolved once every object is in the scene, so it is built here, after
         # the last one and after any placement - not per file.
         self._vr = {}
-        for group, aircraft in list(self._parents.items()):
+        for group, aircraft in parents:
             acf_path = getattr(self, "_acf_files", {}).get(group)
             if not acf_path:
                 continue
@@ -664,6 +771,7 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
                 continue
             if info:
                 self._vr[group] = info
+                _fill_object_manips(bpy.data.collections.get(info["collection"]))
                 if not getattr(self, "place_by_acf", False) and info["hotspots"]:
                     self.report({'INFO'},
                                 "%s: hotspots are placed in the aircraft frame - "
@@ -672,7 +780,7 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
 
         # a parent whose every object failed to import is an empty shell with
         # the aircraft's name on it - drop it instead of leaving that behind
-        for aircraft in list(self._parents.values()):
+        for _group, aircraft in parents:
             if not aircraft.children and not aircraft.objects:
                 context.scene.collection.children.unlink(aircraft)
                 bpy.data.collections.remove(aircraft)
@@ -690,9 +798,12 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
         self.report({'INFO'}, "imported %d of the %d object(s) an .acf "
                     "attaches, %d triangles%s"
                     % (self._made, self._total, self._tris,
-                       ", %d exportable collection(s)" % len(self._colls)
+                       ", %d exportable collection(s)" % self._colls
                        if self._colls else ""))
         _enable_viewport_backface_culling()
+        _trace("finished: %d/%d object(s), %d exportable collection(s), "
+               "%d lost to a rollback" % (self._made, self._total, self._colls,
+                                          getattr(self, "_lost", 0)))
         return {'FINISHED'}
 
 
@@ -1309,9 +1420,11 @@ class OBJECT_OT_xp8_vrconfig_save(bpy.types.Operator):
         context.view_layer.update()
         wrote = 0
         for coll in collections:
-            wrote += XVR.save(context, coll, self.report)["written"]
+            info = XVR.save(context, coll, self.report)
+            wrote += info["written"]
+            _fill_object_manips(coll)
         if wrote:
-            self.report({'INFO'}, "wrote %d hotspot(s)" % wrote)
+            self.report({'INFO'}, "wrote %d block(s)" % wrote)
         return {'FINISHED'}
 
 
@@ -1343,20 +1456,288 @@ class VIEW3D_PT_xplane_vr(bpy.types.Panel):
                 box.label(text="%d manipulator(s) have no geometry" % len(missing),
                           icon='ERROR')
             moved = XVR.changes(coll)
+            pending = XVR.manip_edits(coll)
+            total = len(moved) + len(pending)
             row = box.row()
             row.operator("object.xp8_vrconfig_save",
-                         text="Save %d change(s)" % len(moved) if moved
+                         text="Save %d change(s)" % total if total
                          else "Save VR Config",
-                         icon='FILE_TICK' if moved else 'IMPORT')
+                         icon='FILE_TICK' if total else 'IMPORT')
             if moved:
                 box.label(text="moved: %s"
                           % ", ".join(name for name, _diff in moved[:3]))
+            if pending:
+                box.label(text="%d manipulator block(s) edited" % len(pending))
+
+
+#: set while the panel's widgets are being filled from the file, so the field
+#: callbacks do not write what they just read straight back as an "edit"
+_VR_SYNC = False
+
+
+def _manip_values(item, params):
+    """Copy one block's parameters into a panel item (no callbacks fire)."""
+    values = params.get("DEG_PER_ACTION") or []
+    item.has_deg = bool(values)
+    item.deg = values[0] if values else 0.0
+    values = params.get("SWITCH_THRESHOLD") or []
+    item.has_switch = len(values) >= 2
+    item.switch_deg = values[0] if len(values) > 0 else 0.0
+    item.switch_off = values[1] if len(values) > 1 else 0.0
+    item.hold = bool(params.get("HOLD_MANIP"))
+    item.invert = bool(params.get("INVERT_MANIP"))
+    item.wrap = bool(params.get("WRAP_MANIP"))
+    item.no_visuals = bool(params.get("DISABLE_VISUALS"))
+    item.action = params.get("ACTION") or ""
+
+
+def _push_manip(self, _context=None):
+    """A field changed: record how the panel now differs from the file.
+
+    The state is compared against the block's parameters as imported, so
+    unticking a box means "this directive should not be in the file" rather than
+    "forget my edit" - and a field edited back to the value the file already has
+    leaves nothing pending.  Only the meshes that carry the block are refreshed
+    (`_mirror_manip`): there can be two or three of them, and the panel must not
+    contradict itself between them.
+    """
+    if _VR_SYNC:
+        return
+    coll = bpy.data.collections.get(self.collection)
+    if coll is None:
+        return
+    try:
+        entries = json.loads(coll.get(XVR.PROP_MANIPS) or "[]")
+    except ValueError:
+        return
+    if not (0 <= self.row < len(entries)):
+        return
+    current = entries[self.row].get("params") or {}
+    wanted = {}
+    if self.has_deg:
+        wanted["DEG_PER_ACTION"] = [self.deg]
+    if self.has_switch:
+        wanted["SWITCH_THRESHOLD"] = [self.switch_deg, self.switch_off]
+    for keyword, on in (("HOLD_MANIP", self.hold), ("INVERT_MANIP", self.invert),
+                        ("WRAP_MANIP", self.wrap),
+                        ("DISABLE_VISUALS", self.no_visuals)):
+        if on:
+            wanted[keyword] = True
+    text = self.action.strip()
+    if text:
+        wanted["ACTION"] = text
+    XVR.set_manip_edits(coll, self.row, wanted, current)
+    _mirror_manip(coll, self.row, self)
+
+
+def _mirror_manip(coll, row, source):
+    """Give the other meshes that carry this block the same values.
+
+    Only the meshes listed in the block's own entry are touched: a scan of every
+    object in the file would run once per keystroke of the ACTION field (an
+    aircraft has ~1100 objects), and it is the wrong set anyway.
+    """
+    global _VR_SYNC
+    try:
+        entries = json.loads(coll.get(XVR.PROP_MANIPS) or "[]")
+        names = entries[row].get("objects") if 0 <= row < len(entries) else None
+    except (ValueError, AttributeError):
+        names = None
+    if not names:
+        return
+    owner = getattr(source.id_data, "name", None)
+    _VR_SYNC = True
+    try:
+        for name in names:
+            other = bpy.data.objects.get(name)
+            if other is None:
+                continue
+            for item in other.xp8_vr_manips:
+                if item.collection != coll.name or item.row != row:
+                    continue
+                if name == owner:
+                    continue          # the row being edited, already current
+                item.has_deg, item.deg = source.has_deg, source.deg
+                item.has_switch = source.has_switch
+                item.switch_deg, item.switch_off = source.switch_deg, source.switch_off
+                item.hold, item.invert = source.hold, source.invert
+                item.wrap, item.no_visuals = source.wrap, source.no_visuals
+                item.action = source.action
+    finally:
+        _VR_SYNC = False
+
+
+@_add
+class XP8_VRManip(bpy.types.PropertyGroup):
+    """One `BEGIN_MANIP` block, listed on each mesh that carries it.
+
+    The parameters live in the vrconfig, not in the .obj - but the block is
+    keyed by an `ATTR_manip_*` line *inside* a mesh, which is why this belongs in
+    the object's own properties, next to XPlane2Blender's manipulator settings.
+    Several meshes can carry the same block, and a mesh can carry several: one
+    row per block per mesh, all writing to the same place in the file.
+    """
+    collection: bpy.props.StringProperty()   # the vrconfig collection
+    row: bpy.props.IntProperty()             # its index in that file's blocks
+    kind: bpy.props.StringProperty()
+    key: bpy.props.StringProperty()
+    tooltip: bpy.props.StringProperty()
+    others: bpy.props.StringProperty()       # the other meshes this block drives
+    copied: bpy.props.BoolProperty()         # the file has this key twice
+
+    has_deg: bpy.props.BoolProperty(name="DEG_PER_ACTION", update=_push_manip)
+    deg: bpy.props.FloatProperty(name="Degrees", min=0.0, soft_max=720.0,
+                                 update=_push_manip)
+    has_switch: bpy.props.BoolProperty(name="SWITCH_THRESHOLD", update=_push_manip)
+    switch_deg: bpy.props.FloatProperty(name="Tilt", min=0.0, soft_max=180.0,
+                                        update=_push_manip)
+    switch_off: bpy.props.FloatProperty(name="Offset", min=0.0, soft_max=1.0,
+                                        update=_push_manip)
+    hold: bpy.props.BoolProperty(name="HOLD", update=_push_manip)
+    invert: bpy.props.BoolProperty(name="INVERT", update=_push_manip)
+    wrap: bpy.props.BoolProperty(name="WRAP", update=_push_manip)
+    no_visuals: bpy.props.BoolProperty(name="NO VISUALS", update=_push_manip)
+    action: bpy.props.StringProperty(
+        name="ACTION", update=_push_manip,
+        description="The block's ACTION line: 'ACTION <type> <values> <datarefs>'. "
+                    "Leave it empty to take the directive out of the file")
+
+
+def _fill_object_manips(coll):
+    """(Re)build the per-object rows for one vrconfig after an import or a save."""
+    global _VR_SYNC
+    if coll is None or not coll.get(XVR.PROP_MANIPS):
+        return
+    entries = json.loads(coll.get(XVR.PROP_MANIPS) or "[]")
+    keys = {}
+    for entry in entries:
+        key = (entry.get("type"), entry.get("a"), entry.get("b"))
+        keys[key] = keys.get(key, 0) + 1
+    alive = set(c.name for c in bpy.data.collections if c.get(XVR.PROP_SOURCE))
+    _VR_SYNC = True
+    try:
+        # drop this collection's rows, and any row whose vrconfig is gone (a
+        # re-import replaces the collection), keep the other aircraft's
+        for ob in bpy.data.objects:
+            items = ob.xp8_vr_manips
+            for index in range(len(items) - 1, -1, -1):
+                name = items[index].collection
+                if name == coll.name or name not in alive or \
+                        name not in bpy.data.collections:
+                    items.remove(index)
+        for row, entry in enumerate(entries):
+            objects = [name for name in (entry.get("objects") or [])
+                       if bpy.data.objects.get(name) is not None]
+            key = (entry.get("type"), entry.get("a"), entry.get("b"))
+            for name in objects:
+                item = bpy.data.objects[name].xp8_vr_manips.add()
+                item.collection = coll.name
+                item.row = row
+                item.kind = entry.get("type") or ""
+                item.key = " ".join(part for part in (entry.get("a"),
+                                                      entry.get("b")) if part)
+                item.tooltip = entry.get("tooltip") or ""
+                item.others = ", ".join(other for other in objects if other != name)
+                item.copied = keys.get(key, 0) > 1
+                _manip_values(item, entry.get("params") or {})
+    finally:
+        _VR_SYNC = False
+
+
+def _unattached(coll):
+    """The blocks in this file that no mesh of the aircraft carries."""
+    entries = json.loads(coll.get(XVR.PROP_MANIPS) or "[]")
+    return [entry for entry in entries if not entry.get("objects")]
+
+
+@_add
+class OBJECT_PT_xplane_vr(bpy.types.Panel):
+    """The VR manipulator blocks this object carries, and their parameters"""
+    bl_space_type = 'PROPERTIES'
+    bl_region_type = 'WINDOW'
+    bl_context = "object"
+    bl_label = "VR manipulators"
+    bl_options = {'DEFAULT_CLOSED'}
+
+    @classmethod
+    def poll(cls, context):
+        ob = getattr(context, "object", None)
+        return bool(ob is not None and len(ob.xp8_vr_manips))
+
+    def draw(self, context):
+        layout = self.layout
+        ob = context.object
+        seen = set()
+        for item in ob.xp8_vr_manips:
+            coll = bpy.data.collections.get(item.collection)
+            box = layout.box()
+            head = box.row(align=True)
+            head.label(text=item.kind or "manip", icon='DRIVER')
+            head.label(text=item.key)
+            if coll is not None:
+                box.label(text=coll.name, icon='FILE_TEXT')
+            else:
+                box.label(text="its vrconfig collection is gone - import the "
+                               "aircraft again", icon='ERROR')
+            if item.copied:
+                box.label(text="this key is in the file twice - X-Plane applies "
+                               "only one of them", icon='ERROR')
+            if item.tooltip:
+                box.label(text=item.tooltip, icon='INFO')
+            if item.others:
+                box.label(text="also drives %s" % item.others, icon='MESH_DATA')
+
+            col = box.column(align=True)
+            row = col.row(align=True)
+            row.prop(item, "has_deg", text="")
+            sub = row.row(align=True)
+            sub.active = item.has_deg
+            sub.label(text="DEG_PER_ACTION")
+            sub.prop(item, "deg", text="")
+            row = col.row(align=True)
+            row.prop(item, "has_switch", text="")
+            sub = row.row(align=True)
+            sub.active = item.has_switch
+            sub.label(text="SWITCH_THRESHOLD")
+            sub.prop(item, "switch_deg", text="deg")
+            sub.prop(item, "switch_off", text="m")
+            flags = col.row(align=True)
+            flags.prop(item, "hold", toggle=True)
+            flags.prop(item, "invert", toggle=True)
+            flags.prop(item, "wrap", toggle=True)
+            flags.prop(item, "no_visuals", toggle=True)
+            col.prop(item, "action", text="ACTION")
+            if coll is not None:
+                seen.add(coll.name)
+
+        # what this mesh cannot show: the parameters of the rest of the file
+        for name in sorted(seen):
+            coll = bpy.data.collections.get(name)
+            if coll is None:
+                continue
+            pending = XVR.manip_edits(coll)
+            orphans = _unattached(coll)
+            if pending or orphans:
+                box = layout.box()
+                if pending:
+                    box.label(text="%d block(s) edited - not written yet"
+                              % len(pending), icon='INFO')
+                    box.operator("object.xp8_vrconfig_save", icon='FILE_TICK',
+                                 text="Save VR Config")
+                if orphans:
+                    box.label(text="%d block(s) match no geometry in this "
+                                   "aircraft (X-Plane ignores them)"
+                              % len(orphans), icon='QUESTION')
+                    for entry in orphans[:4]:
+                        box.label(text="%s %s" % (entry.get("type") or "",
+                                                  entry.get("a") or ""))
 
 
 def register():
     _register_xp2b()
     for cls in CLASSES:
         bpy.utils.register_class(cls)
+    bpy.types.Object.xp8_vr_manips = CollectionProperty(type=XP8_VRManip)
     bpy.types.TOPBAR_MT_file_import.append(_menu_import)
     bpy.types.VIEW3D_MT_object.append(_menu_object)
 
@@ -1417,6 +1798,8 @@ def unregister():
         pass
     for cls in reversed(CLASSES):
         bpy.utils.unregister_class(cls)
+    if hasattr(bpy.types.Object, "xp8_vr_manips"):
+        del bpy.types.Object.xp8_vr_manips
     if _own_xp2b:
         animated = _animated_through_xp2b()
         import io_xplane2blender as xplane2blender

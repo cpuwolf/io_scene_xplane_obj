@@ -48,6 +48,7 @@ PROP_HASH = "vrconfig_hash"
 PROP_ORIGIN = "vrconfig_origin"
 PROP_HOTSPOTS = "vrconfig_hotspots"
 PROP_MANIPS = "vrconfig_manips"
+PROP_EDITS = "vrconfig_manip_edits"
 PROP_AIRCRAFT = "vr_aircraft"
 PROP_HOTSPOT = "vr_hotspot"
 PROP_KIND = "vr_kind"
@@ -205,6 +206,34 @@ def find(acf_path):
     return vrconfig.find(acf_path)
 
 
+def _drop_previous(path):
+    """Remove whatever a previous import of this same file left behind.
+
+    Without this, importing the same aircraft twice stacks a second vrconfig
+    collection with a second set of hotspot cameras on top of the first, and the
+    two of them point at one file - saving one then refuses to write the other,
+    because the file no longer matches what it was imported from.
+    """
+    dropped = 0
+    for coll in [c for c in bpy.data.collections if c.get(PROP_SOURCE) == path]:
+        if manip_edits(coll):
+            print("xplane_obj: %d unsaved vrconfig edit(s) for %s discarded by "
+                  "the re-import" % (len(manip_edits(coll)),
+                                     os.path.basename(path)), flush=True)
+        for ob in list(coll.objects):
+            bpy.data.objects.remove(ob, do_unlink=True)
+        owners = list(bpy.data.collections)
+        scene = getattr(bpy.context, "scene", None)
+        if scene is not None:
+            owners.append(scene.collection)
+        for owner in owners:
+            if owner.children.get(coll.name) is not None:
+                owner.children.unlink(coll)
+        bpy.data.collections.remove(coll)
+        dropped += 1
+    return dropped
+
+
 def build(context, aircraft_coll, acf_path, report=None):
     """Import the aircraft's vrconfig into the scene.
 
@@ -214,6 +243,16 @@ def build(context, aircraft_coll, acf_path, report=None):
     path = find(acf_path)
     if path is None:
         return None
+    try:
+        # an undo during a modal import frees the collections it had built
+        if bpy.data.collections.get(aircraft_coll.name) is not aircraft_coll:
+            return None
+    except ReferenceError:
+        return None
+    dropped = _drop_previous(path)
+    if dropped:
+        print("xplane_obj: replaced %d earlier vrconfig collection(s) for %s"
+              % (dropped, os.path.basename(path)), flush=True)
     vr = vrconfig.parse(path)
     cg_feet = acfcodec.read_cg(acf_path)
     origin = vr.origin(cg_feet)
@@ -255,7 +294,8 @@ def build(context, aircraft_coll, acf_path, report=None):
     for manip in vr.manips:
         manips.append({"type": manip.type, "a": manip.a, "b": manip.b,
                        "tooltip": manip.tooltip, "action": manip.action,
-                       "objects": manip.sources, "block": "\n".join(manip.lines)})
+                       "objects": manip.sources, "block": "\n".join(manip.lines),
+                       "params": manip_params(manip)})
         for object_name in manip.sources:
             ob = bpy.data.objects.get(object_name)
             if ob is None:
@@ -266,6 +306,7 @@ def build(context, aircraft_coll, acf_path, report=None):
                 tags.append(tag)
                 ob[PROP_OBJ_MANIPS] = tags
     coll[PROP_MANIPS] = json.dumps(manips)
+    coll[PROP_EDITS] = "{}"
 
     summary = {
         "file": name, "collection": coll.name,
@@ -291,6 +332,66 @@ def build(context, aircraft_coll, acf_path, report=None):
 def _with_origin(point, origin):
     ox, oy, oz = origin["offset"]
     return (point[0] + ox, point[1] + oy, point[2] + oz)
+
+
+# ---------------------------------------------------------------------------
+# manipulator parameters: what the panel shows and edits
+# ---------------------------------------------------------------------------
+
+def manip_params(manip):
+    """The editable directives of one block, as plain data.
+
+    ``{"DEG_PER_ACTION": [30.0], "SWITCH_THRESHOLD": [8.0, 0.05],
+       "HOLD_MANIP": True, "ACTION": "ACTION axis_knob 0 360 0.1 sim/x"}`` -
+    only what the block actually carries, so a panel can tell "absent" from
+    "present with a value".  The block's own text stays the source of truth; this
+    is its projection.
+    """
+    params = {}
+    for keyword in vrconfig.VALUED:
+        values = manip.values(keyword)
+        if values:
+            params[keyword] = values
+    for keyword in vrconfig.FLAGS:
+        if manip.has(keyword):
+            params[keyword] = True
+    if manip.action:
+        params["ACTION"] = manip.action
+    return params
+
+
+def manip_edits(coll):
+    """Pending edits: ``{row index: {keyword: value}}``."""
+    try:
+        return json.loads(coll.get(PROP_EDITS) or "{}")
+    except ValueError:
+        return {}
+
+
+def set_manip_edits(coll, index, wanted, current):
+    """Record how `wanted` differs from `current` for one block.
+
+    `wanted` is the panel's state, `current` the block's parameters as the file
+    has them.  A key that is in `current` but not in `wanted` becomes ``None``,
+    which means "this directive should not be in the file" - an unticked box is
+    a removal, not a no-op.  A key that ends up equal to the file is dropped from
+    the table, so nothing is written and the panel's "N edited" count is honest.
+    """
+    diff = {}
+    for keyword in set(wanted) | set(current):
+        if wanted.get(keyword) != current.get(keyword):
+            diff[keyword] = wanted.get(keyword)
+    edits = manip_edits(coll)
+    if diff:
+        edits[str(int(index))] = diff
+    else:
+        edits.pop(str(int(index)), None)
+    coll[PROP_EDITS] = json.dumps(edits)
+    return edits
+
+
+def clear_manip_edits(coll):
+    coll[PROP_EDITS] = "{}"
 
 
 def _from_origin(point, origin):
@@ -393,7 +494,8 @@ def save(context, coll, report=None):
     (the aircraft's own updater, an editor) may have touched it, and silently
     applying a stale scene over their work is the failure nobody forgives.
     """
-    info = {"written": 0, "changed": [], "path": coll.get(PROP_SOURCE)}
+    info = {"written": 0, "changed": [], "manips": [],
+            "path": coll.get(PROP_SOURCE)}
     path = info["path"]
     if not path or not os.path.isfile(path):
         if report is not None:
@@ -412,7 +514,8 @@ def save(context, coll, report=None):
         return info
 
     diffs = changes(coll)
-    if not diffs:
+    pending = manip_edits(coll)
+    if not diffs and not pending:
         if report is not None:
             report({'INFO'}, "vrconfig: nothing changed, %s left alone"
                    % os.path.basename(path))
@@ -423,6 +526,47 @@ def save(context, coll, report=None):
     for hotspot in vr.hotspots:
         by_name.setdefault(hotspot.name, hotspot)
     edits = []
+
+    # a hotspot reads the scene; a manipulator block reads the pending table
+    for row, params in sorted(pending.items(), key=lambda kv: int(kv[0])):
+        index = int(row)
+        if not (0 <= index < len(vr.manips)):
+            if report is not None:
+                report({'WARNING'},
+                       "vrconfig: manipulator row %d is no longer in the file" % index)
+            continue
+        manip = vr.manips[index]
+        lines = list(manip.lines)
+        for keyword, value in params.items():
+            if keyword in vrconfig.FLAGS:
+                lines = vrconfig.rewrite_flag(lines, keyword, bool(value))
+            elif keyword == "ACTION":
+                text = (value or "").strip()
+                if not text:
+                    lines = vrconfig.rewrite_drop(lines, keyword)
+                    continue
+                else:
+                    words = text.split()
+                    if len(words) < 2 or words[0] != "ACTION":
+                        # the panel hands back whatever was typed; a line that
+                        # does not start with ACTION would be silently ignored
+                        # by X-Plane, which looks like "my knob stopped working"
+                        if report is not None:
+                            report({'WARNING'},
+                                   "vrconfig: %r is not an ACTION line - %s %s "
+                                   "left as it is" % (text, manip.type,
+                                                      manip.a or ""))
+                        continue
+                lines = vrconfig.rewrite_raw(lines, keyword, text or None)
+            elif keyword in vrconfig.VALUED:
+                if not value:
+                    lines = vrconfig.rewrite_drop(lines, keyword)
+                else:
+                    lines = vrconfig.rewrite_lines(lines, keyword, value)
+        if lines != list(manip.lines):
+            edits.append((manip, lines))
+            info["manips"].append("%s %s" % (manip.type, manip.a or ""))
+
     for name, diff in diffs:
         hotspot = by_name.get(name)
         if hotspot is None:
@@ -435,6 +579,7 @@ def save(context, coll, report=None):
         edits.append((hotspot, lines))
         info["changed"].append(name)
     if not edits:
+        clear_manip_edits(coll)
         return info
 
     text = vrconfig.splice(vr, edits)
@@ -448,11 +593,18 @@ def save(context, coll, report=None):
     coll[PROP_DUMP] = text
     coll[PROP_HASH] = _digest(text.encode("utf-8"))
     _refresh_stored(coll, path)
+    clear_manip_edits(coll)
     if report is not None:
-        report({'INFO'}, "vrconfig: wrote %d hotspot(s) to %s (%s)"
-               % (len(edits), os.path.basename(path), ", ".join(info["changed"])))
-    print("xplane_obj: vrconfig %s - wrote %s"
-          % (os.path.basename(path), ", ".join(info["changed"])), flush=True)
+        what = []
+        if info["changed"]:
+            what.append("%d hotspot(s): %s"
+                        % (len(info["changed"]), ", ".join(info["changed"])))
+        if info["manips"]:
+            what.append("%d manipulator(s)" % len(info["manips"]))
+        report({'INFO'}, "vrconfig: wrote %s to %s"
+               % (" and ".join(what), os.path.basename(path)))
+    print("xplane_obj: vrconfig %s - wrote %d block(s)"
+          % (os.path.basename(path), len(edits)), flush=True)
     return info
 
 
@@ -477,3 +629,19 @@ def _refresh_stored(coll, path):
         entry["angles"] = [hotspot.psi, hotspot.the, hotspot.phi]
         entry["block"] = "\n".join(hotspot.lines)
     coll[PROP_HOTSPOTS] = json.dumps(hotspots)
+
+    # and the manipulator table, so the panel shows the numbers that are now in
+    # the file instead of the ones it was imported with
+    manips = json.loads(coll.get(PROP_MANIPS) or "[]")
+    for index, entry in enumerate(manips):
+        if index >= len(vr.manips):
+            break
+        manip = vr.manips[index]
+        entry["type"] = manip.type
+        entry["a"] = manip.a
+        entry["b"] = manip.b
+        entry["tooltip"] = manip.tooltip
+        entry["action"] = manip.action
+        entry["block"] = "\n".join(manip.lines)
+        entry["params"] = manip_params(manip)
+    coll[PROP_MANIPS] = json.dumps(manips)

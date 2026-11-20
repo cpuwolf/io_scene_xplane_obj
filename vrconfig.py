@@ -48,6 +48,13 @@ HEADER = ("A", "1100", "VRCONFIG")
 #: standing one places the *feet* (so a preview camera needs an eye height).
 KINDS = ("SITTING", "STANDING")
 
+#: flags a manip block can carry: no argument, so presence is the value.
+FLAGS = ("HOLD_MANIP", "INVERT_MANIP", "WRAP_MANIP", "DISABLE_VISUALS")
+
+#: directives with numbers, and how many each takes (SWITCH_THRESHOLD is
+#: degrees then metres off-axis - the spec's own wording).
+VALUED = {"DEG_PER_ACTION": 1, "SWITCH_THRESHOLD": 2}
+
 #: default eye height above the floor for a STANDING hotspot, metres.  Preview
 #: only - the file always stores the feet position.
 EYE_HEIGHT = 1.70
@@ -123,6 +130,22 @@ class Manip(object):
     def key(self):
         """Lookup key against the OBJ side: (type, a, b-or-None)."""
         return (self.type, self.a, self.b)
+
+    def line_of(self, keyword):
+        """The block's own line for `keyword`, or None."""
+        for line in self.options:
+            words = line.split()
+            if words and words[0] == keyword:
+                return line
+        return None
+
+    def values(self, keyword):
+        """The numbers after `keyword` (empty when the line is absent)."""
+        line = self.line_of(keyword)
+        return _numbers(line.split()[1:]) if line else []
+
+    def has(self, keyword):
+        return self.line_of(keyword) is not None
 
     def __repr__(self):
         return "<Manip %s %s %s>" % (self.type, self.a, self.b or "")
@@ -429,6 +452,65 @@ def rewrite_lines(lines, keyword, values):
                 indent = line[:len(line) - len(line.lstrip())]
                 break
         new = _emit(indent + keyword + " 0", keyword, values)
+        if out and out[-1].strip().startswith("END_"):
+            out.insert(len(out) - 1, new)
+        else:
+            out.append(new)
+    return out
+
+
+def _indent_of(lines):
+    for line in lines[1:]:
+        if line.strip() and not line.strip().startswith("END_"):
+            return line[:len(line) - len(line.lstrip())]
+    return ""
+
+
+def rewrite_flag(lines, keyword, present):
+    """`lines` with a no-argument flag (``HOLD_MANIP`` and friends) added/removed.
+
+    Adding appends the line before ``END_``; removing deletes it.  A flag that
+    already matches what was asked for is left exactly as written, so saving an
+    untouched block still produces no diff.
+    """
+    has = any(line.strip().split()[:1] == [keyword] for line in lines)
+    if present and not has:
+        new = _indent_of(lines) + keyword
+        out = list(lines)
+        if out and out[-1].strip().startswith("END_"):
+            out.insert(len(out) - 1, new)
+        else:
+            out.append(new)
+        return out
+    if not present and has:
+        return [line for line in lines if line.strip().split()[:1] != [keyword]]
+    return lines
+
+
+def rewrite_drop(lines, keyword):
+    """`lines` without the `keyword` directive (one directive or a whole rule).
+
+    This is what an unticked checkbox on the panel means: the line should not be
+    in the file at all, which is a different instruction from "leave it alone"
+    and one an empty value cannot express.
+    """
+    return [line for line in lines if line.strip().split()[:1] != [keyword]]
+
+
+def rewrite_raw(lines, keyword, text):
+    """Replace a whole directive line (``ACTION``) with `text`; ``None`` removes it."""
+    out = []
+    done = False
+    for line in lines:
+        words = line.strip().split()
+        if words and words[0] == keyword:
+            done = True
+            if text:
+                out.append(_indent_of(lines) + text.strip())
+            continue
+        out.append(line)
+    if not done and text:
+        new = _indent_of(lines) + text.strip()
         if out and out[-1].strip().startswith("END_"):
             out.insert(len(out) - 1, new)
         else:
