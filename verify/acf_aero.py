@@ -230,6 +230,10 @@ if groups:
               for o in objs))
     check("the collection is not an exportable XP2B layer",
           not group.xplane.is_exportable_collection)
+    note = group.get(XB.PROP_SOURCE) or ""
+    check("the collection says a wing grid is the stored shape, not the flown one",
+          "not this mesh" in note and "_Ctip" in note,
+          repr(note[:60]))
     roots = addon._collection_roots(aircraft)
     check("Place by .acf does not move them",
           not [o for o in roots if o.get(XB.PROP)],

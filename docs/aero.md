@@ -69,7 +69,53 @@ For a wing the same projection gives the planform, which is what the dump's
 "wing area" is: the Lancair's four right-hand panels project to **6.434 m²**
 against the **6.46 m²** it reports for the joined wing (the difference is the
 overlap the sim adds when it joins the sections), and its root chord comes out at
-5.75 ft against the 1.75 m (5.74 ft) it prints.
+5.75 ft against the 1.75 m (5.74 ft) it prints. That holds for a wing whose grid
+is still fresh — see the next section for what happens when it is not.
+
+## A wing grid is the stored shape, not the shape that flies
+
+The sim does not fly a wing's `_geo_xyz` grid. It flies the parameters: `_Croot`,
+`_Ctip`, `_sweep_design`, `_dihed_design`, the per-rib tables (`_chord_for_RIB/<i>`,
+`_c_rat_for_RIB/<i>`, `_incidence/<i>`, `_inc_trim/<i>`) and the airfoils named on
+the Wings screen.
+
+Measured on a Cessna 172: change Wing 1's tip chord in Plane Maker (5.20 → 4.60 ft),
+save, fly it, dump the cycle.
+
+| | wing 1 area | joined wing |
+|---|---|---|
+| `Cycle Dump.txt` | **3.1866 m²** | 7.0662 m² |
+| from the parameters — 7.00 ft × (5.20 + 4.60) / 2 | **3.1866 m²** | 7.0699 m² |
+| from the grid — 7.00 ft × 5.193, untouched by that edit | 3.3771 m² | 7.2574 m² |
+
+Plane Maker changed no `_wing/*/_geo_xyz` point at all when it saved that edit —
+only `_Ctip`, the rib table and `_average_mac_acf`. So a saved `.acf` can carry a
+wing grid that no longer matches its parameters, and it keeps carrying it: the
+grid is a picture of the last time something regenerated it, not a live copy of
+the wing.
+
+What follows for the import:
+
+- the wing mesh is worth having — it is the shape Plane Maker shows and the only
+  record of how the section curves were placed — but it is **not** evidence of
+  what the sim flies. Read `_Croot` / `_Ctip` / the rib table for that;
+- **do not edit it**: nothing in Plane Maker reads it back, so a change there
+  cannot reach the flight model. The `Aero` collection says so in a custom
+  property, `acf_aero_source`;
+- **bodies are the opposite**: a body has no parameters to fall back on, its grid
+  *is* the aerodynamic data (`_part_*` plus the sections) — which is why the areas
+  in the table above reproduce the dump to four decimals. A body is editable; a
+  wing panel is a picture.
+
+Two ways to read a wing grid wrongly, both of which raised false alarms across
+the stock fleet while working this out:
+
+- **dihedral**: take the slope of the section's centroid. Reading it at the
+  quarter-chord point mixes in the twist (`_incidence`) — the 737's wing measures
+  2.26° against its 6.0° parameter that way, 6.37° at the centroid;
+- **tip chord**: the last station is often a **tip cap**, not the wing tip. The
+  PA-18's first 17 stations are 5.243 ft and the 18th is 2.100 ft, so taking the
+  last station as the tip chord makes a rectangular wing look 60 % wrong.
 
 ## What the import builds
 
@@ -81,7 +127,8 @@ One mesh per body and per wing panel, in an `Aero` collection under the aircraft
 - metres, mapped to Blender `(x, -z, y)` — the same turn the OBJ8 importer makes,
   so it sits on top of the imported model;
 - a body's `_part_*` position and pitch/heading/roll are baked into its points; a
-  wing's grid is used as it stands. Either way every object has an identity
+  wing's grid is used as it stands (and may be older than the wing it describes —
+  see above). Either way every object has an identity
   transform (nothing for the exporter to do, nothing for a later placement switch
   to undo);
 - wireframe in Solid view, translucent when rendered (`show_in_front`), so the

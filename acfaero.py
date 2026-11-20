@@ -58,6 +58,19 @@ PROP_AREA_RULE = "acf_aero_area_rule"
 PROP_SECTIONS = "acf_aero_sections"
 PROP_POINTS = "acf_aero_points"
 
+#: what these grids are, told on the collection itself.  A wing's grid is the
+#: shape Plane Maker last stored: editing a wing parameter does not rewrite it,
+#: and the sim flies the parameters, so the mesh is not evidence of the wing the
+#: aircraft flies (docs/aero.md, "A wing grid is the stored shape").  A body has
+#: no parameters to fall back on - its grid *is* the aerodynamic data.
+PROP_SOURCE = "acf_aero_source"
+SOURCE_NOTE = (
+    "Wing grids are stored display geometry: Plane Maker does not rewrite them "
+    "when a wing parameter changes, and the sim flies _Croot/_Ctip/"
+    "_sweep_design/_dihed_design plus the per-rib tables (_chord_for_RIB, "
+    "_incidence), not this mesh.  Body grids are the aerodynamic data itself "
+    "(_part_* plus the sections).  See docs/aero.md.")
+
 #: Plane Maker's names for the wing slots: 0/1..6/7 are the four wing sections
 #: (left, right), 8/9 the horizontal stabiliser, 10/11 the two vertical ones
 def _wing_name(slot, right):
@@ -260,6 +273,7 @@ def wings(path):
 def _collection(aircraft):
     coll = bpy.data.collections.new(GROUP)
     coll.color_tag = AERO_TAG
+    coll[PROP_SOURCE] = SOURCE_NOTE
     aircraft.children.link(coll)
     return coll
 
