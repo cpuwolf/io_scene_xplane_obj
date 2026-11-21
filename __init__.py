@@ -856,6 +856,7 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
         # itself.
         self._bodies = 0
         self._wings = 0
+        self._geared = 0
         if getattr(self, "import_aero", True):
             for group, aircraft in parents:
                 acf_path = getattr(self, "_acf_files", {}).get(group)
@@ -874,6 +875,11 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
                     continue
                 self._bodies += info["bodies"]
                 self._wings += info["wings"]
+                self._geared += len(info.get("geared") or ())
+                if info.get("geared"):
+                    print("xplane_obj: %s: %s placed on its gear, the .acf's "
+                          "stored position was stale"
+                          % (aircraft.name, ", ".join(info["geared"])), flush=True)
                 print("xplane_obj: %s: %d aero body(ies), %d wing(s), %d faces"
                       % (aircraft.name, info["bodies"], info["wings"],
                          info["faces"]), flush=True)
@@ -940,7 +946,7 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
             return {'CANCELLED'}
 
         self.report({'INFO'}, "imported %d of the %d object(s) an .acf "
-                    "attaches, %d triangles%s%s%s"
+                    "attaches, %d triangles%s%s%s%s"
                     % (self._made, self._total, self._tris,
                        ", %d exportable collection(s)" % self._colls
                        if self._colls else "",
@@ -950,14 +956,17 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
                        ", %d aero body(ies) and %d wing(s) in 'Aero'"
                        % (self._bodies, self._wings)
                        if getattr(self, "_bodies", 0) or getattr(self, "_wings", 0)
-                       else ""))
+                       else "",
+                       "; %d gear fairing(s) placed on their wheel, not on the "
+                       "position the .acf still carries" % self._geared
+                       if getattr(self, "_geared", 0) else ""))
         _enable_viewport_backface_culling()
         _trace("finished: %d/%d object(s), %d exportable collection(s), "
                "%d wreckage excluded, %d aero body(ies), %d wing(s), "
-               "%d lost to a rollback"
+               "%d geared, %d lost to a rollback"
                % (self._made, self._total, self._colls, wrecked,
                   getattr(self, "_bodies", 0), getattr(self, "_wings", 0),
-                  getattr(self, "_lost", 0)))
+                  getattr(self, "_geared", 0), getattr(self, "_lost", 0)))
         return {'FINISHED'}
 
 

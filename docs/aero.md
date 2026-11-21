@@ -117,6 +117,44 @@ the stock fleet while working this out:
   PA-18's first 17 stations are 5.243 ft and the 18th is 2.100 ft, so taking the
   last station as the tip chord makes a rectangular wing look 60 % wrong.
 
+## A body on a gear leg is placed by the gear
+
+`_body/<n>/_gear_for_body` ties a fairing to a gear leg (a wheel pant, a skid
+fairing). Plane Maker puts such a body where the leg ends, not where `_part_*`
+says — and it does not rewrite `_part_*` when the gear changes, so the stored
+numbers can be badly out of date:
+
+| aircraft | stored `_part_*` | the gear's wheel | drift |
+|---|---|---|---|
+| Cessna 172, mains | −4.240 −3.010 4.340 | −4.116 −3.478 4.458 | 0.19 ft |
+| Van's RV-10, mains | −3.460 −3.140 0.730 | −4.199 −3.656 0.314 | 0.74 ft |
+| Cirrus SR22, mains | −5.960 −3.000 1.400 | −4.518 −3.486 1.214 | 1.44 ft |
+| Robinson R22, skids | 0.000 0.000 0.000 | ∓2.850 −3.629 −4.500 | 4.50 ft |
+
+The wheel is the leg vector from `_gear_x/_y/_z`, `_leg_len`, `_latE` and `_lonE`:
+
+```
+wheel = attach + leg * ( sin(latE),
+                        -cos(latE) * cos(lonE),
+                        -cos(latE) * sin(lonE) )
+```
+
+Checked against the imported models of those four aircraft: the nearest tyre
+island sits 0.08 ft (Cirrus), 0.20 (Cessna), 0.43 (Van's) and 0.35 (R22) from
+that point, so it is the wheel within the model's own slack.
+
+So the import takes the wheel whenever the stored position disagrees with it by
+more than `GEAR_SLOP` (0.5 ft) and leaves the file alone when it does not: the
+Cessna keeps its authored positions, the Cirrus' mains and the R22's skids land
+on their wheels. Each re-seated object carries `acf_aero_gear` saying what
+happened and what the file said, and the import summary counts them.
+
+⚠️ The fairing's *own* offset from the wheel is not recoverable — `_part_*` was
+the only record of it, and it is exactly the thing that goes stale. Putting the
+grid origin on the wheel matched the SR22's pant to 0.2 ft, which is as close as
+the file alone allows. That is why this is a re-seat with a threshold, not a
+claim to reproduce Plane Maker's own placement exactly.
+
 ## What the import builds
 
 One mesh per body and per wing panel, in an `Aero` collection under the aircraft:

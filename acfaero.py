@@ -32,6 +32,7 @@ against the 6.46 the dump reports for the joined wing).
 """
 
 import math
+import re
 
 import bmesh
 import bpy
@@ -70,6 +71,16 @@ SOURCE_NOTE = (
     "_sweep_design/_dihed_design plus the per-rib tables (_chord_for_RIB, "
     "_incidence), not this mesh.  Body grids are the aerodynamic data itself "
     "(_part_* plus the sections).  See docs/aero.md.")
+
+#: how far a gear-attached body's stored position may drift from the wheel its
+#: gear defines before the gear is believed instead (feet).  Measured drift on
+#: the stock fleet: Cessna 0.19 ft (fine), Van's 0.74, Cirrus 1.44, R22 4.50
+#: (`_part_*` left at 0,0,0) - Plane Maker does not rewrite these when the gear
+#: changes, so an aircraft whose gear was edited later carries a stale position.
+GEAR_SLOP = 0.5
+
+#: set on a body whose position came from its gear rather than the file
+PROP_GEAR = "acf_aero_gear"
 
 #: Plane Maker's names for the wing slots: 0/1..6/7 are the four wing sections
 #: (left, right), 8/9 the horizontal stabiliser, 10/11 the two vertical ones
@@ -209,11 +220,43 @@ def _to_blender(p):
     return (p[0] * FEET, -p[2] * FEET, p[1] * FEET)
 
 
+def gear_wheels(text):
+    """{gear slot: wheel centre in aircraft feet}.
+
+    A leg hangs from `_gear_x/_y/_z` and extends `_leg_len` feet down, `_latE`
+    degrees sideways and `_lonE` degrees fore/aft, so
+
+        wheel = attach + leg * ( sin(latE),
+                                -cos(latE) * cos(lonE),
+                                -cos(latE) * sin(lonE) )
+
+    Checked against the tyre geometry of four imported models: the nearest tyre
+    island lands 0.08 ft (Cirrus), 0.20 (Cessna), 0.43 (Van's) and 0.35 (R22)
+    from this point, so it is the wheel to within the model's own slack.
+    """
+    raw = {}
+    for line in text.splitlines():
+        m = re.match(r"^P _gear/(\d+)/(_gear_[xyz]|_leg_len|_latE|_lonE)\s+(\S+)$",
+                     line.strip())
+        if m:
+            raw.setdefault(int(m.group(1)), {})[m.group(2)] = _float(m.group(3), 0.0)
+    out = {}
+    for slot, g in raw.items():
+        leg = g.get("_leg_len", 0.0)
+        lat = math.radians(g.get("_latE", 0.0))
+        lon = math.radians(g.get("_lonE", 0.0))
+        out[slot] = (g.get("_gear_x", 0.0) + leg * math.sin(lat),
+                     g.get("_gear_y", 0.0) - leg * math.cos(lat) * math.cos(lon),
+                     g.get("_gear_z", 0.0) - leg * math.cos(lat) * math.sin(lon))
+    return out
+
+
 def bodies(path):
     """Every Plane Maker body in the .acf, already placed in the aircraft frame."""
     text = _read_text(path)
     if text is None:
         return []
+    wheels = gear_wheels(text)
     out = []
     for slot, grid in _grids(text, "_body").items():
         scal = grid["scal"]
@@ -221,6 +264,17 @@ def bodies(path):
                        for k in ("_part_x", "_part_y", "_part_z"))
         matrix = _matrix(tuple(_float(scal.get(k), 0.0)
                                for k in ("_part_the", "_part_psi", "_part_phi")))
+        # a body bolted to a gear leg sits where the gear puts it.  Plane Maker
+        # leaves `_part_*` behind when the gear is edited, and the sim/Plane
+        # Maker recompute the wheel from the gear, so a stored position that
+        # disagrees by more than GEAR_SLOP is stale - take the gear's wheel.
+        fix = None
+        gear = _int(scal.get("_gear_for_body"))
+        if gear is not None and gear >= 0 and gear in wheels:
+            wheel = wheels[gear]
+            if max(abs(wheel[i] - offset[i]) for i in range(3)) > GEAR_SLOP:
+                fix = {"gear": gear, "stored": offset, "wheel": wheel}
+                offset = wheel
         points = [[_place(p, offset, matrix) for p in ring]
                   for ring in grid["points"]]
         out.append({
@@ -233,6 +287,7 @@ def bodies(path):
             "s": grid["s"],
             "cd": _float(scal.get("_part_cd"), None),
             "area_rule": _float(scal.get("_part_area_rule"), None),
+            "gear_fix": fix,
         })
     return out
 
@@ -343,11 +398,18 @@ def build(context, aircraft, acf_path):
     material = _material()
     verts = faces = 0
     count = {"body": 0, "wing": 0}
+    geared = []
     for part in parts:
         me = _mesh(part["name"], part["points"], part["r"], part["s"], material)
         ob = bpy.data.objects.new(part["name"], me)
         ob[PROP] = "%s#%d" % (acf_path.rsplit("/", 1)[-1], part["slot"])
         ob[PROP_KIND] = part["kind"]
+        fix = part.get("gear_fix")
+        if fix:
+            ob[PROP_GEAR] = ("gear %d: the file says (%.2f, %.2f, %.2f), the "
+                             "gear's wheel is (%.2f, %.2f, %.2f) - placed on the "
+                             "wheel" % ((fix["gear"],) + fix["stored"] + fix["wheel"]))
+            geared.append(part["name"])
         if part["cd"] is not None:
             ob[PROP_CD] = part["cd"]
         if part["area_rule"] is not None:
@@ -364,4 +426,5 @@ def build(context, aircraft, acf_path):
         verts += len(me.vertices)
         faces += len(me.polygons)
     return {"collection": coll.name, "bodies": count["body"],
-            "wings": count["wing"], "vertices": verts, "faces": faces}
+            "wings": count["wing"], "vertices": verts, "faces": faces,
+            "geared": geared}

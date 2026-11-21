@@ -208,6 +208,36 @@ check("left and right are separate slots, mirrored about x=0",
       abs(abs(llo[0]) - rhi[0]) < 1e-3 and abs(lhi[0]) < 0.15,
       "L %.3f..%.3f  R %.3f..%.3f" % (llo[0], lhi[0], rlo[0], rhi[0]))
 
+# --- fairings bolted to a gear leg -------------------------------------------
+# Plane Maker does not rewrite `_part_*` when the gear changes, so a fairing's
+# stored position can be far from the wheel it belongs to.  The gear defines the
+# wheel: attach + leg * (sin latE, -cos latE cos lonE, -cos latE sin lonE).
+SR22 = acf("Cirrus SR22.acf")
+R22 = acf("Robinson R22 Beta II.acf")
+wheels = XB.gear_wheels(XB._read_text(SR22))
+check("the Cirrus' main legs put their wheels at x +-4.52 ft",
+      abs(wheels[1][0] + 4.518) < 0.01 and abs(wheels[2][0] - 4.518) < 0.01,
+      ["%.3f %.3f %.3f" % wheels[i] for i in (1, 2)])
+sr22 = XB.bodies(SR22)
+fixed = {b["name"]: b["gear_fix"] for b in sr22 if b.get("gear_fix")}
+check("its two main fairings are re-seated on their wheels",
+      len(fixed) == 2 and sorted(f["gear"] for f in fixed.values()) == [1, 2],
+      sorted(fixed))
+check("...from a stored position 1.44 ft too far outboard",
+      all(abs(f["stored"][0] - f["wheel"][0]) > 1.4 for f in fixed.values()),
+      ["%.2f -> %.2f" % (f["stored"][0], f["wheel"][0]) for f in fixed.values()])
+check("...while the nose fairing keeps the position the file gives it",
+      not [b for b in sr22 if b["slot"] == 29 and b.get("gear_fix")])
+check("the Cessna's three fairings agree with their wheels and are left alone",
+      not [b for b in XB.bodies(C172) if b.get("gear_fix")])
+r22 = XB.bodies(R22)
+check("the R22's skid fairings are stored at 0,0,0 and take the gear's wheel",
+      all(b.get("gear_fix") for b in r22 if b["slot"] in (29, 30))
+      and abs(r22[[b["slot"] for b in r22].index(29)]["gear_fix"]["wheel"][0]
+              + 2.85) < 0.01,
+      [(b["slot"], tuple(round(v, 2) for v in b["gear_fix"]["wheel"]))
+       for b in r22 if b.get("gear_fix")])
+
 # --- a real import -----------------------------------------------------------
 for ob in list(bpy.data.objects):
     bpy.data.objects.remove(ob, do_unlink=True)
