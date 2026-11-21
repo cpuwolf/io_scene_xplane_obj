@@ -155,9 +155,17 @@ grid origin on the wheel matched the SR22's pant to 0.2 ft, which is as close as
 the file alone allows. That is why this is a re-seat with a threshold, not a
 claim to reproduce Plane Maker's own placement exactly.
 
+The import draws that line as well: every leg becomes a tapered tube from its
+attach point to its wheel, named `Gear 1 strut`, … in a `Gear` child collection
+inside `Aero`, so a fairing that has just been re-seated on its wheel does not
+look like it is floating. The `.acf` carries no leg radius — the tube's fat end
+is 6 % of the leg length, capped at 0.30 ft — so it is a diagram of where the leg
+runs, not a model of it. Nothing in it is exported.
+
 ## What the import builds
 
-One mesh per body and per wing panel, in an `Aero` collection under the aircraft:
+One mesh per body and per wing panel, in an `Aero` collection under the aircraft,
+plus one `Gear <n> strut` tube per leg in its `Gear` child collection:
 
 - `Body 1 Fuselage`, `Wing 1 R`, `Wing 2 L`, `H-Stab 1 R`, `V-Stab 1`, … — the
   names are Plane Maker's (slots 0..7 are the four wing sections, left/right;

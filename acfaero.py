@@ -53,6 +53,10 @@ AERO_TAG = "COLOR_06"
 #: the collection the geometry lands in, one per aircraft
 GROUP = "Aero"
 
+#: the gear legs, in a child collection of GROUP (they explain where a fairing
+#: body sits; the .acf has no leg radius, so they are a diagram, not a model)
+GEAR_GROUP = "Gear"
+
 #: what the flight model measures, so the numbers live in the outliner too
 PROP_CD = "acf_aero_cd"
 PROP_AREA_RULE = "acf_aero_area_rule"
@@ -325,6 +329,72 @@ def wings(path):
     return out
 
 
+def gear_legs(path):
+    """{gear slot: attach point, wheel, tyre} for the legs this aircraft has.
+
+    A gear leg is the "strut" Plane Maker talks about ("lat arm / long arm / vert
+    arm: attach point of the strut to the fuselage"), so `_gear_x/_y/_z` to the
+    wheel is the line the fairing hangs off.  Ten slots exist and the unused ones
+    are zeroed, hence the `_leg_len` test.
+    """
+    text = _read_text(path)
+    if text is None:
+        return {}
+    wheels = gear_wheels(text)
+    raw = {}
+    for line in text.splitlines():
+        m = re.match(r"^P _gear/(\d+)/(_gear_type|_leg_len|_tire_radius|"
+                     r"_tire_swidth|_gear_[xyz])\s+(\S+)$", line.strip())
+        if m:
+            raw.setdefault(int(m.group(1)), {})[m.group(2)] = _float(m.group(3), 0.0)
+    out = {}
+    for slot, g in raw.items():
+        leg = g.get("_leg_len", 0.0)
+        if leg <= 0.0 or slot not in wheels:
+            continue
+        out[slot] = {"attach": tuple(g.get("_gear_" + a, 0.0) for a in "xyz"),
+                     "wheel": wheels[slot],
+                     "leg": leg,
+                     "tire": g.get("_tire_radius", 0.0),
+                     "width": g.get("_tire_swidth", 0.0),
+                     "type": int(g.get("_gear_type", 0.0))}
+    return out
+
+
+def _unit(v):
+    n = math.sqrt(sum(x * x for x in v)) or 1.0
+    return tuple(x / n for x in v)
+
+
+def _cross(a, b):
+    return (a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0])
+
+
+def _strut_mesh(name, attach, wheel, radius, material, sides=8):
+    """A tapered tube from a gear's attach point to its wheel, in aircraft feet.
+
+    The .acf carries no leg radius, so the fat end is 6% of the leg length
+    (capped at 0.30 ft) - enough to read as the strut the fairing is bolted to,
+    not a claim about its real thickness.
+    """
+    axis = tuple(wheel[i] - attach[i] for i in range(3))
+    d = _unit(axis)
+    ref = (0.0, 0.0, 1.0) if abs(d[2]) < 0.9 else (1.0, 0.0, 0.0)
+    u = _unit(_cross(d, ref))
+    v = _cross(d, u)
+    rings = []
+    for t, r in ((0.0, radius * 0.3), (0.15, radius), (0.85, radius * 0.7),
+                 (1.0, radius * 0.25)):
+        c = tuple(attach[i] + t * axis[i] for i in range(3))
+        rings.append([tuple(c[k] + r * (math.cos(2.0 * math.pi * j / sides) * u[k]
+                                        + math.sin(2.0 * math.pi * j / sides) * v[k])
+                              for k in range(3))
+                      for j in range(sides)])
+    return _mesh(name, rings, sides, len(rings), material)
+
+
 def _collection(aircraft):
     coll = bpy.data.collections.new(GROUP)
     coll.color_tag = AERO_TAG
@@ -425,6 +495,30 @@ def build(context, aircraft, acf_path):
         count[part["kind"]] += 1
         verts += len(me.vertices)
         faces += len(me.polygons)
+
+    # the legs the fairings hang off: a gear body sits at the wheel, and without
+    # the strut it looks like it is floating.  The line is attach point -> wheel,
+    # which is what Plane Maker draws on its Bodies and Landing Gear screens.
+    struts = 0
+    gear_coll = None
+    for slot, leg in sorted(gear_legs(acf_path).items()):
+        if gear_coll is None:
+            gear_coll = bpy.data.collections.new(GEAR_GROUP)
+            gear_coll.color_tag = AERO_TAG
+            coll.children.link(gear_coll)
+        radius = max(0.12, min(0.30, leg["leg"] * 0.06))
+        me = _strut_mesh("Gear %d strut" % (slot + 1), leg["attach"], leg["wheel"],
+                         radius, material)
+        ob = bpy.data.objects.new(me.name, me)
+        ob[PROP] = "%s#gear%d" % (acf_path.rsplit("/", 1)[-1], slot)
+        ob[PROP_KIND] = "gear"
+        ob[PROP_GEAR] = ("strut from the attach point (%.2f, %.2f, %.2f) to the "
+                         "wheel (%.2f, %.2f, %.2f)" % (leg["attach"] + leg["wheel"]))
+        ob.display_type = 'WIRE'
+        ob.show_in_front = True
+        ob.color = (0.55, 0.35, 0.85, 1.0)
+        gear_coll.objects.link(ob)
+        struts += 1
     return {"collection": coll.name, "bodies": count["body"],
             "wings": count["wing"], "vertices": verts, "faces": faces,
-            "geared": geared}
+            "geared": geared, "struts": struts}

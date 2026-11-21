@@ -238,6 +238,18 @@ check("the R22's skid fairings are stored at 0,0,0 and take the gear's wheel",
       [(b["slot"], tuple(round(v, 2) for v in b["gear_fix"]["wheel"]))
        for b in r22 if b.get("gear_fix")])
 
+# the leg the fairing hangs off: attach point -> wheel, which is what Plane Maker
+# calls the strut ("lat arm / long arm / vert arm: attach point of the strut")
+legs = XB.gear_legs(C172)
+check("the Cessna's three legs are 2.20 ft (nose) and 3.00 ft (mains)",
+      len(legs) == 3 and abs(legs[0]["leg"] - 2.2) < 1e-3
+      and abs(legs[1]["leg"] - 3.0) < 1e-3,
+      {k: round(v["leg"], 2) for k, v in legs.items()})
+check("...ending on the tyres the model has",
+      abs(legs[1]["wheel"][0] + 4.116) < 0.01
+      and abs(legs[1]["wheel"][1] + 3.478) < 0.01,
+      tuple(round(v, 3) for v in legs[1]["wheel"]))
+
 # --- a real import -----------------------------------------------------------
 for ob in list(bpy.data.objects):
     bpy.data.objects.remove(ob, do_unlink=True)
@@ -260,6 +272,29 @@ if groups:
               for o in objs))
     check("the collection is not an exportable XP2B layer",
           not group.xplane.is_exportable_collection)
+    legs_ask = XB.gear_legs(ASK21)
+    gear_colls = [c for c in group.children if c.name == XB.GEAR_GROUP]
+    check("the legs come in a '%s' child collection" % XB.GEAR_GROUP,
+          len(gear_colls) == (1 if legs_ask else 0),
+          [(c.name, len(c.objects)) for c in gear_colls])
+    if gear_colls:
+        struts = list(gear_colls[0].objects)
+        off = []
+        for ob in struts:
+            slot = int(str(ob[XB.PROP]).rsplit("gear", 1)[1])
+            leg = legs_ask[slot]
+            mid = [(leg["attach"][i] + leg["wheel"][i]) / 2.0 for i in range(3)]
+            vs = [ob.matrix_world @ v.co for v in ob.data.vertices]
+            c = (sum(v.x for v in vs) / len(vs) / FEET,
+                 sum(v.z for v in vs) / len(vs) / FEET,
+                 -sum(v.y for v in vs) / len(vs) / FEET)
+            off.append(math.dist(c, mid))
+        check("one strut per leg, each running attach point -> wheel",
+              len(struts) == len(legs_ask) and max(off) < 0.05,
+              "%.3f ft worst of %d" % (max(off), len(struts)))
+        check("...and XP2B never writes them",
+              all(o.get(XB.PROP_KIND) == "gear" for o in struts),
+              [o.name for o in struts])
     note = group.get(XB.PROP_SOURCE) or ""
     check("the collection says a wing grid is the stored shape, not the flown one",
           "not this mesh" in note and "_Ctip" in note,
