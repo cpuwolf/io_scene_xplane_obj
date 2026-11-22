@@ -86,6 +86,13 @@ GEAR_SLOP = 0.5
 #: set on a body whose position came from its gear rather than the file
 PROP_GEAR = "acf_aero_gear"
 
+#: the tyre's own numbers, on the tyre object.  The .acf stores the radius and
+#: the *semi*-width ("radius (not diameter) and semi-width (not width)" is Plane
+#: Maker's tooltip), so the width written here is the visual one, 2 x the file's
+PROP_TIRE_RADIUS = "acf_tire_radius"
+PROP_TIRE_WIDTH = "acf_tire_width"
+PROP_TIRE_PSI = "acf_tire_psi"
+
 #: Plane Maker's names for the wing slots: 0/1..6/7 are the four wing sections
 #: (left, right), 8/9 the horizontal stabiliser, 10/11 the two vertical ones
 def _wing_name(slot, right):
@@ -344,7 +351,7 @@ def gear_legs(path):
     raw = {}
     for line in text.splitlines():
         m = re.match(r"^P _gear/(\d+)/(_gear_type|_leg_len|_tire_radius|"
-                     r"_tire_swidth|_gear_[xyz])\s+(\S+)$", line.strip())
+                     r"_tire_swidth|_tire_psi|_gear_[xyz])\s+(\S+)$", line.strip())
         if m:
             raw.setdefault(int(m.group(1)), {})[m.group(2)] = _float(m.group(3), 0.0)
     out = {}
@@ -357,6 +364,7 @@ def gear_legs(path):
                      "leg": leg,
                      "tire": g.get("_tire_radius", 0.0),
                      "width": g.get("_tire_swidth", 0.0),
+                     "psi": g.get("_tire_psi", 0.0),
                      "type": int(g.get("_gear_type", 0.0))}
     return out
 
@@ -395,9 +403,27 @@ def _strut_mesh(name, attach, wheel, radius, material, sides=8):
     return _mesh(name, rings, sides, len(rings), material)
 
 
+def _tire_mesh(name, wheel, radius, half_width, material, sides=16):
+    """The tyre at the wheel: `radius` across, `2 * half_width` wide.
+
+    Plane Maker's own tooltip for these two keys is "the radius (not diameter)
+    and semi-width (not width) of the tire", so `_tire_swidth` is only half of
+    the visual width - a 737's 0.690 ft comes out as the 16.5 in section it
+    really has, not 8.3.  It spins about the aircraft's x.
+    """
+    rings = []
+    for dx, scale in ((-half_width, 0.86), (-half_width * 0.55, 1.0),
+                      (half_width * 0.55, 1.0), (half_width, 0.86)):
+        c = (wheel[0] + dx, wheel[1], wheel[2])
+        rings.append([(c[0],
+                       c[1] + radius * scale * math.cos(2.0 * math.pi * j / sides),
+                       c[2] + radius * scale * math.sin(2.0 * math.pi * j / sides))
+                      for j in range(sides)])
+    return _mesh(name, rings, sides, len(rings), material)
+
+
 def _collection(aircraft):
     coll = bpy.data.collections.new(GROUP)
-    coll.color_tag = AERO_TAG
     coll[PROP_SOURCE] = SOURCE_NOTE
     aircraft.children.link(coll)
     return coll
@@ -500,6 +526,7 @@ def build(context, aircraft, acf_path):
     # the strut it looks like it is floating.  The line is attach point -> wheel,
     # which is what Plane Maker draws on its Bodies and Landing Gear screens.
     struts = 0
+    tires = 0
     gear_coll = None
     for slot, leg in sorted(gear_legs(acf_path).items()):
         if gear_coll is None:
@@ -519,6 +546,21 @@ def build(context, aircraft, acf_path):
         ob.color = (0.55, 0.35, 0.85, 1.0)
         gear_coll.objects.link(ob)
         struts += 1
+        if leg["tire"] > 0.0:
+            me = _tire_mesh("Gear %d tire" % (slot + 1), leg["wheel"],
+                            leg["tire"], leg["width"], material)
+            to = bpy.data.objects.new(me.name, me)
+            to[PROP] = "%s#tire%d" % (acf_path.rsplit("/", 1)[-1], slot)
+            to[PROP_KIND] = "gear"
+            to[PROP_TIRE_RADIUS] = leg["tire"]
+            to[PROP_TIRE_WIDTH] = leg["width"] * 2.0
+            if leg["psi"] > 0.0:
+                to[PROP_TIRE_PSI] = leg["psi"]
+            to.display_type = 'WIRE'
+            to.show_in_front = True
+            to.color = (0.55, 0.35, 0.85, 1.0)
+            gear_coll.objects.link(to)
+            tires += 1
     return {"collection": coll.name, "bodies": count["body"],
             "wings": count["wing"], "vertices": verts, "faces": faces,
-            "geared": geared, "struts": struts}
+            "geared": geared, "struts": struts, "tires": tires}

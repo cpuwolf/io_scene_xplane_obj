@@ -249,6 +249,11 @@ check("...ending on the tyres the model has",
       abs(legs[1]["wheel"][0] + 4.116) < 0.01
       and abs(legs[1]["wheel"][1] + 3.478) < 0.01,
       tuple(round(v, 3) for v in legs[1]["wheel"]))
+check("...with the tyre the gear declares: radius, semi-width, pressure",
+      abs(legs[1]["tire"] - 0.65) < 1e-6 and abs(legs[1]["width"] - 0.23) < 1e-6
+      and abs(legs[1]["psi"] - 41.7) < 0.1,
+      "r %.3f ft, semi-width %.3f ft (%.1f in wide), %.1f psi"
+      % (legs[1]["tire"], legs[1]["width"], legs[1]["width"] * 24.0, legs[1]["psi"]))
 
 # --- a real import -----------------------------------------------------------
 for ob in list(bpy.data.objects):
@@ -278,7 +283,7 @@ if groups:
           len(gear_colls) == (1 if legs_ask else 0),
           [(c.name, len(c.objects)) for c in gear_colls])
     if gear_colls:
-        struts = list(gear_colls[0].objects)
+        struts = [o for o in gear_colls[0].objects if "#gear" in str(o[XB.PROP])]
         off = []
         for ob in struts:
             slot = int(str(ob[XB.PROP]).rsplit("gear", 1)[1])
@@ -295,6 +300,21 @@ if groups:
         check("...and XP2B never writes them",
               all(o.get(XB.PROP_KIND) == "gear" for o in struts),
               [o.name for o in struts])
+        tires = [o for o in gear_colls[0].objects
+                 if str(o[XB.PROP]).rsplit("#", 1)[-1].startswith("tire")]
+        bad = []
+        for t in tires:
+            slot = int(str(t[XB.PROP]).rsplit("tire", 1)[1])
+            leg = legs_ask[slot]
+            lo_t, hi_t = bbox(t.data)
+            if (abs(t[XB.PROP_TIRE_RADIUS] - leg["tire"]) > 1e-6
+                    or abs(t[XB.PROP_TIRE_WIDTH] - 2.0 * leg["width"]) > 1e-6
+                    or abs((hi_t[2] - lo_t[2]) - 2.0 * leg["tire"] * FEET) > 0.02
+                    or abs((hi_t[0] - lo_t[0]) - 2.0 * leg["width"] * FEET) > 0.02):
+                bad.append(t.name)
+        check("one tyre per leg, as wide as 2 x the semi-width the file gives",
+              len(tires) == len(legs_ask) and not bad,
+              "%d tyre(s), bad %s" % (len(tires), bad))
     note = group.get(XB.PROP_SOURCE) or ""
     check("the collection says a wing grid is the stored shape, not the flown one",
           "not this mesh" in note and "_Ctip" in note,

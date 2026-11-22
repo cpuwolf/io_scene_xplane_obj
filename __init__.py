@@ -858,6 +858,7 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
         self._wings = 0
         self._geared = 0
         self._struts = 0
+        self._tires = 0
         if getattr(self, "import_aero", True):
             for group, aircraft in parents:
                 acf_path = getattr(self, "_acf_files", {}).get(group)
@@ -878,6 +879,7 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
                 self._wings += info["wings"]
                 self._geared += len(info.get("geared") or ())
                 self._struts += info.get("struts") or 0
+                self._tires += info.get("tires") or 0
                 if info.get("geared"):
                     print("xplane_obj: %s: %s placed on its gear, the .acf's "
                           "stored position was stale"
@@ -963,7 +965,7 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
                        "position the .acf still carries" % self._geared
                        if getattr(self, "_geared", 0) else "",
                        "; %d gear strut(s) drawn in 'Aero/Gear' from attach point "
-                       "to wheel" % self._struts
+                       "to wheel, %d tyre(s) with them" % (self._struts, self._tires)
                        if getattr(self, "_struts", 0) else ""))
         _enable_viewport_backface_culling()
         _trace("finished: %d/%d object(s), %d exportable collection(s), "

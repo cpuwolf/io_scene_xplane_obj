@@ -162,10 +162,26 @@ look like it is floating. The `.acf` carries no leg radius — the tube's fat en
 is 6 % of the leg length, capped at 0.30 ft — so it is a diagram of where the leg
 runs, not a model of it. Nothing in it is exported.
 
+Each leg also gets its tyre, from the three keys the gear carries:
+
+```
+_gear/<n>/_tire_radius     the radius, in feet (not the diameter)
+_gear/<n>/_tire_swidth     the SEMI-width - the visual tyre is twice this
+_gear/<n>/_tire_psi        pressure, psi
+```
+
+Plane Maker's own tooltip spells the second one out: *"This is the radius (not
+diameter), and semi-width (not width) of the tire."* That is worth knowing before
+drawing anything: a 737's 0.690 ft is the 16.5 in section it really has, not 8.3
+in, and the A330's 0.880 ft is its 21 in. The tyre object carries `acf_tire_radius`,
+`acf_tire_width` (already doubled) and `acf_tire_psi` as custom properties, so the
+numbers are readable in Blender without going back to the file.
+
 ## What the import builds
 
 One mesh per body and per wing panel, in an `Aero` collection under the aircraft,
-plus one `Gear <n> strut` tube per leg in its `Gear` child collection:
+plus one `Gear <n> strut` tube and one `Gear <n> tire` barrel per leg in its
+`Gear` child collection:
 
 - `Body 1 Fuselage`, `Wing 1 R`, `Wing 2 L`, `H-Stab 1 R`, `V-Stab 1`, … — the
   names are Plane Maker's (slots 0..7 are the four wing sections, left/right;
