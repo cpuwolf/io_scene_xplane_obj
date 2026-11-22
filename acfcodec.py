@@ -56,6 +56,22 @@ COCKPIT_BITS = (1 << 11) | (1 << 12)
 #: requires.  Nothing in the .obj says this: it exists only in the .acf.
 WRECKAGE_BIT = 1 << 9
 
+#: ...and `prefill` is bit 8, from the same dialog's three-way popup
+#: (`No Prefill / Prefill / Prefill Only` in the Plane Maker binary, with
+#: "Blocking clouds inside the 3-d cockpit can significantly improve framerates.
+#: Only use Prefill with fully opaque, cheap-to-draw objects...").  A prefill
+#: object is drawn before the world so the clouds behind the cockpit are never
+#: filled in; the objects that carry the bit are pure mask geometry, not
+#: airframe.  Verified across the 26 .acf files on hand (844 slots): the bit is
+#: set on 14 objects, every one of them named `*prefill*.obj`, and on nothing
+#: else.  Nothing in the .obj says it - only the .acf does.
+#:
+#: Which of the two "on" levels a given object is (draw twice, or mask only) is
+#: NOT separable from these files: all 14 carry the same flags, so the fleet
+#: cannot say whether 256 alone means `Prefill` or `Prefill Only`.  Do not print
+#: that distinction anywhere until someone diffs Plane Maker's own writes.
+PREFILL_BIT = 1 << 8
+
 OBJ_EXT = ".obj"
 
 # the two folders X-Plane resolves an attached object against, in its order
@@ -194,6 +210,11 @@ def is_wreckage(bits):
     return bool(bits & WRECKAGE_BIT)
 
 
+def is_prefill(bits):
+    """Is this `_obj_flags` value a prefill object (a cloud mask, not airframe)?"""
+    return bool(bits & PREFILL_BIT)
+
+
 def _flagged_objects(acf_path, wanted_bits):
     """The resolved paths whose slot has any bit of `wanted_bits` set."""
     try:
@@ -236,6 +257,22 @@ def wreckage_objects(acf_path):
     import keeps them in a collection of their own - see `WRECKAGE_TAG`.
     """
     return _flagged_objects(acf_path, WRECKAGE_BIT)
+
+
+def prefill_objects(acf_path):
+    """The resolved paths this .acf uses to mask clouds behind the cockpit.
+
+    X-Plane draws the inside-cockpit view by drawing the whole world first, then
+    the cockpit over it - so every pixel the panel covers was filled with clouds
+    and then overdrawn.  A prefill object is drawn up front to cut that work out;
+    it saves GPU fill rate and changes nothing about how the aircraft looks.
+    Authors build these as cheap, untextured proxies of the cockpit shell (on the
+    MD-82: 4 197 triangles in one batch, against 227 577 in 877 batches for the
+    real interior), and they sit *inside* the aircraft - invisible in the sim,
+    but in front of everything in Blender.  So the import keeps them in a
+    collection of their own: see `PREFILL_TAG`.
+    """
+    return _flagged_objects(acf_path, PREFILL_BIT)
 
 
 #: the CG, in feet, in the same authoring-point frame the `_obja` offsets use.

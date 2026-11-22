@@ -80,6 +80,22 @@ _obja/0/_v10_att_file_stl ../Cessna_172SP_cockpit.obj
   import's summary message says how many). Which objects are wreckage is read
   from the `.acf` and nothing else — no `.obj` carries the mark, and their file
   names are no guide (`broken_*`, `wreck_*`, and F-4's `F4_wrek/`).
+* **Prefill objects go into their own `Prefill` collection, also excluded.**
+  Plane Maker's prefill popup (`No Prefill / Prefill / Prefill Only`) is
+  `_obj_flags` bit 8. These are not parts of the aeroplane: X-Plane draws them
+  *before* the world so the clouds behind the 3-d cockpit are never filled in,
+  and authors build them as cheap untextured masks sitting inside the aircraft
+  (on the MD-82 it is one tube around the whole cabin: 4 197 triangles in 1
+  batch, against 227 577 in 877 batches for the real interior). Imported like any
+  other object they would be a white shell in front of the cockpit, so they get a
+  yellow (`COLOR_03`) collection of their own, excluded from the view layer like
+  wreckage — which also keeps them out of XPlane2Blender's export list. Re-enable
+  `Prefill` before exporting if the aircraft is meant to keep its prefill; while
+  it is off, the file is not written and the sim silently loses the optimization
+  (the import's summary says how many files that is). Read from the `.acf` only:
+  across the 26 files on hand the bit is set on exactly the 14 `*prefill*.obj`
+  objects and on nothing else. Which of the two "on" levels an object is cannot
+  be told from the file — every Laminar prefill object carries the same flags.
 * **The flight model's own geometry comes in too — Plane Maker's Bodies and
   Wings.** Both are point grids in the `.acf` (`_body/<n>/_geo_xyz/<i>,<j>,<k>`
   and `_wing/<n>/…`, feet), and the sim measures them: frontal area is the largest

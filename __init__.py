@@ -112,6 +112,17 @@ WRECKAGE_TAG = 'COLOR_02'
 #: ...and the name of that collection, one per aircraft.
 WRECKAGE_GROUP = "Wreckage"
 
+#: Prefill objects (`_obj_flags` bit 8, see `acfcodec.PREFILL_BIT`) are cloud
+#: masks drawn before the world, not parts of the aeroplane: on the MD-82 the
+#: whole thing is one untextured tube wrapped around the entire cabin.  Dropped
+#: into a collection of its own, tagged yellow - COLOR_03, the palette's third
+#: colour - so the four groups read apart at a glance: orange wreckage, yellow
+#: prefill, green cockpit, blue VR.
+PREFILL_TAG = 'COLOR_03'
+
+#: ...and the name of that collection, one per aircraft.
+PREFILL_GROUP = "Prefill"
+
 
 def _import_objects(context, paths, report, coll=None, weld_vertices=False):
     """Import every path into the scene; (files imported, triangles, headers).
@@ -576,9 +587,13 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
         self._cockpit = set()
         # ...and the ones that are only drawn after the aircraft is destroyed
         self._wreckage = set()
-        # aircraft collection name -> its `Wreckage` collection's name (names,
-        # never datablocks: a rollback mid-import can free one under us)
+        # ...and the ones that only exist to mask clouds behind the 3-d cockpit
+        self._prefill = set()
+        # aircraft collection name -> its `Wreckage` / `Prefill` collection's
+        # name (names, never datablocks: a rollback mid-import can free one
+        # under us)
         self._wreck_groups = {}
+        self._prefill_groups = {}
         for acf in acfs:
             try:
                 found, gone = AF.objects(acf)
@@ -587,6 +602,7 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
                 continue
             self._cockpit |= AF.cockpit_objects(acf)
             self._wreckage |= AF.wreckage_objects(acf)
+            self._prefill |= AF.prefill_objects(acf)
             group = os.path.basename(acf)
             # the aircraft collection is keyed by this basename, but the offset
             # lives in the file itself - keep the path to read it later
@@ -761,11 +777,21 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
                 self._colls += len(colls)
             key = os.path.normcase(path)
             wreckage = key in self._wreckage
+            prefill = key in self._prefill
             # wreckage is drawn exactly where the intact part is, and only after
-            # the aircraft is destroyed: it goes into a collection of its own,
-            # which `_finish_run` excludes from the view layer
-            target = (self._wreckage_group(context, parent) if wreckage
-                      else parent)
+            # the aircraft is destroyed; prefill objects are untextured masks
+            # X-Plane draws before the world, and they sit in front of the whole
+            # cockpit in Blender.  Neither belongs with the aeroplane, so each
+            # goes into a collection of its own, which `_finish_run` excludes
+            # from the view layer
+            if wreckage:
+                target = self._hidden_group(context, parent, self._wreck_groups,
+                                            WRECKAGE_GROUP)
+            elif prefill:
+                target = self._hidden_group(context, parent,
+                                            self._prefill_groups, PREFILL_GROUP)
+            else:
+                target = parent
             # the conversion renames this collection to the file name and only
             # builds a new one when it cannot, so both are re-homed and tagged:
             # either way the object ends up in exactly one of them
@@ -773,21 +799,25 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
                 _adopt(target, coll)
                 if wreckage:
                     coll.color_tag = WRECKAGE_TAG
+                elif prefill:
+                    coll.color_tag = PREFILL_TAG
                 elif key in self._cockpit:
                     coll.color_tag = COCKPIT_TAG
         context.window_manager.progress_update(self._done)
 
-    def _wreckage_group(self, context, parent):
-        """The `Wreckage` collection under `parent`, created on first use.
+    def _hidden_group(self, context, parent, groups, name):
+        """The `name` collection under `parent`, created on first use.
 
         One per aircraft rather than one for the whole scene, so it folds away
         with the aircraft it belongs to, and so a second import does not pool two
-        planes' debris in one place.
+        planes' debris in one place.  `groups` is the per-run book of what has
+        been made (collection name -> collection name): the same file can be
+        reached again under a second .acf in the same run.
         """
-        coll = bpy.data.collections.get(self._wreck_groups.get(parent.name) or "")
+        coll = bpy.data.collections.get(groups.get(parent.name) or "")
         if coll is None:
-            coll = bpy.data.collections.new(WRECKAGE_GROUP)
-            self._wreck_groups[parent.name] = coll.name
+            coll = bpy.data.collections.new(name)
+            groups[parent.name] = coll.name
         if parent.children.get(coll.name) is None:
             parent.children.link(coll)
         return coll
@@ -918,25 +948,31 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
                 context.scene.collection.children.unlink(aircraft)
                 bpy.data.collections.remove(aircraft)
 
-        # Wreckage is only drawn by the sim once the aircraft is destroyed, so it
-        # starts hidden: `exclude` takes it out of the viewport *and* out of the
-        # depsgraph (a plain hide would still evaluate every mesh).  The price is
-        # that XPlane2Blender skips whatever the view layer does not show, so the
-        # count below says those objects are not being exported right now.
+        # Wreckage is only drawn by the sim once the aircraft is destroyed, and a
+        # prefill object is an untextured mask the sim draws before the world, so
+        # both start hidden: `exclude` takes them out of the viewport *and* out
+        # of the depsgraph (a plain hide would still evaluate every mesh).  The
+        # price is that XPlane2Blender skips whatever the view layer does not
+        # show, so the count below says those objects are not being exported
+        # right now.
         # Done before the early returns, so a stopped import is left the same way.
-        wrecked = 0
-        for name in self._wreck_groups.values():
-            coll = bpy.data.collections.get(name)
-            if coll is None:
-                continue
-            layer_coll = _layer_collection(context.view_layer, coll)
-            if layer_coll is None:
-                continue
-            if not layer_coll.exclude:
-                layer_coll.exclude = True
-            # files, not Blender objects: this sits next to "imported N of the N
-            # object(s) an .acf attaches", and N counts .obj files
-            wrecked += len(coll.children)
+        hidden = {"wreckage": 0, "prefill": 0}
+        for kind, groups in (("wreckage", self._wreck_groups),
+                             ("prefill", self._prefill_groups)):
+            for name in groups.values():
+                coll = bpy.data.collections.get(name)
+                if coll is None:
+                    continue
+                layer_coll = _layer_collection(context.view_layer, coll)
+                if layer_coll is None:
+                    continue
+                if not layer_coll.exclude:
+                    layer_coll.exclude = True
+                # files, not Blender objects: this sits next to "imported N of
+                # the N object(s) an .acf attaches", and N counts .obj files
+                hidden[kind] += len(coll.children)
+        wrecked = hidden["wreckage"]
+        prefilled = hidden["prefill"]
 
         if self._made and not self._can_convert:
             self.report({'ERROR'}, _XP2B_MISSING)
@@ -950,13 +986,16 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
             return {'CANCELLED'}
 
         self.report({'INFO'}, "imported %d of the %d object(s) an .acf "
-                    "attaches, %d triangles%s%s%s%s%s"
+                    "attaches, %d triangles%s%s%s%s%s%s"
                     % (self._made, self._total, self._tris,
                        ", %d exportable collection(s)" % self._colls
                        if self._colls else "",
                        "; %d wreckage file(s) left out of the view layer "
                        "(re-enable 'Wreckage' to export them)" % wrecked
                        if wrecked else "",
+                       "; %d prefill file(s) left out of the view layer "
+                       "(re-enable 'Prefill' to export them)" % prefilled
+                       if prefilled else "",
                        ", %d aero body(ies) and %d wing(s) in 'Aero'"
                        % (self._bodies, self._wings)
                        if getattr(self, "_bodies", 0) or getattr(self, "_wings", 0)
@@ -969,9 +1008,9 @@ class IMPORT_OT_xplane_acf(bpy.types.Operator, ImportHelper):
                        if getattr(self, "_struts", 0) else ""))
         _enable_viewport_backface_culling()
         _trace("finished: %d/%d object(s), %d exportable collection(s), "
-               "%d wreckage excluded, %d aero body(ies), %d wing(s), "
-               "%d geared, %d strut(s), %d lost to a rollback"
-               % (self._made, self._total, self._colls, wrecked,
+               "%d wreckage excluded, %d prefill excluded, %d aero body(ies), "
+               "%d wing(s), %d geared, %d strut(s), %d lost to a rollback"
+               % (self._made, self._total, self._colls, wrecked, prefilled,
                   getattr(self, "_bodies", 0), getattr(self, "_wings", 0),
                   getattr(self, "_geared", 0), getattr(self, "_struts", 0),
                   getattr(self, "_lost", 0)))

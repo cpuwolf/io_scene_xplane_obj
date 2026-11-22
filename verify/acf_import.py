@@ -146,20 +146,23 @@ print("acf parents matching the input: %d, exportable under one: %d/%d"
       % (len(named), len(nested), len(exportable)), flush=True)
 
 # wreckage starts excluded from the view layer (the sim only draws it after a
-# crash), which takes it out of the exporter's list too - so turn it back on
-# before counting roots: this check is about nesting, not about what is hidden
+# crash), and so does prefill (it is a cloud mask, not airframe) - which takes
+# both out of the exporter's list too, so turn them back on before counting
+# roots: this check is about nesting, not about what is hidden
+HIDDEN_GROUPS = tuple(getattr(M, attr, default) for attr, default in
+                      (("WRECKAGE_GROUP", "Wreckage"), ("PREFILL_GROUP", "Prefill")))
 reenabled = 0
 for parent in named:
     for child in parent.children_recursive:
-        if not child.name.startswith(getattr(M, "WRECKAGE_GROUP", "Wreckage")):
+        if not child.name.startswith(HIDDEN_GROUPS):
             continue
         layer_coll = M._layer_collection(bpy.context.view_layer, child)
         if layer_coll is not None and layer_coll.exclude:
             layer_coll.exclude = False
             reenabled += len(child.children)
 if reenabled:
-    print("wreckage: %d collection(s) re-enabled for the export count" % reenabled,
-          flush=True)
+    print("%s: %d collection(s) re-enabled for the export count"
+          % ("/".join(HIDDEN_GROUPS), reenabled), flush=True)
 
 # nesting must not hide a root from the exporter: XP2B walks collections
 # recursively, so it has to find every layer inside the .acf collection
